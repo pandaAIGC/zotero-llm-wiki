@@ -69,13 +69,17 @@ PROJECT_DIR/                       # 项目根目录
 ```
 PDF 来源（下载 / 用户提供 / Zotero storage）
   ↓
-import_to_zotero()  →  PDF 移入 PAPERS_DIR（永久），Zotero linked_file 指向它
+import_to_zotero()  →  创建 Zotero 条目（如传了 pdf_path 则同时归档到 PAPERS_DIR）
   ↓
-ingest_paper()      →  读 PDF → MinerU 解析 → 缓存写入 parsed/{KEY}/{KEY}.md + images/
+ingest_paper()      →  ★ 确保 PDF 归档到 PAPERS_DIR（自动移动 + 更新 linked_file）
+                       → 读 PDF → MinerU 解析 → 缓存写入 parsed/{KEY}/{KEY}.md + images/
                        → 切块 → 智谱 Embedding → ChromaDB 入库
   ↓
 后续所有阅读操作    →  直接读 parsed/{KEY}/{KEY}.md 缓存，不碰 PDF
 ```
+
+> **注意：** `ingest_paper` 会自动将 PDF 归档到 PAPERS_DIR 并更新 Zotero linked_file。
+> 即使 Agent 跳过了 `import_to_zotero`（直接从 download → ingest），PDF 也会被正确归档。
 
 ### 文件查找优先级
 
@@ -245,15 +249,16 @@ MinerU 解析时从 PDF 中提取所有图片，保存在 `parsed/{KEY}/images/`
 ```
 download_paper(doi) → data/downloads/ 临时文件
     ↓
-import_to_zotero() → 移到 PAPERS_DIR 永久存储，linked_file 指向这里
+import_to_zotero() → 创建 Zotero 条目（如传了 pdf_path 则归档到 PAPERS_DIR）
     ↓
-ingest_paper() → 从 PAPERS_DIR 直接读 PDF（不复制），MinerU 解析
+ingest_paper() → ★ 自动归档 PDF 到 PAPERS_DIR + 更新 Zotero linked_file
+    → 从 PAPERS_DIR 读 PDF（不复制），MinerU 解析
     → 缓存写入 parsed/{KEY}/{KEY}.md + images/（只缓存文本，不缓存 PDF）
     ↓
 后续所有操作 → 从 parsed/{KEY}/{KEY}.md 读缓存，不碰 PDF
 ```
 
-**原则：整个流程 PDF 只存 1 份（在 PAPERS_DIR）。**
+**原则：整个流程 PDF 只存 1 份（在 PAPERS_DIR）。`ingest_paper` 是归档的最终保障。**
 
 ---
 

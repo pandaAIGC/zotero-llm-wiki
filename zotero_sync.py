@@ -301,6 +301,34 @@ def _get_linked_file_path(zot: zotero.Zotero, item_key: str) -> str | None:
     return None
 
 
+
+def update_linked_file_path(item_key: str, new_path: str, zot=None) -> bool:
+    """
+    Update Zotero linked_file attachment path after PDF has been archived.
+
+    Args:
+        item_key: parent item's Zotero key
+        new_path: new absolute PDF path
+        zot: Zotero client (optional)
+
+    Returns: True if updated, False otherwise
+    """
+    if zot is None:
+        zot = _get_client()
+    try:
+        children = zot.children(item_key)
+        for child in children:
+            data = child['data']
+            if data.get('linkMode') == 'linked_file' and data.get('contentType') == 'application/pdf':
+                data['path'] = str(new_path)
+                zot.update_item(data)
+                logger.info(f'Updated linked_file for {item_key}: {new_path}')
+                return True
+    except Exception as e:
+        logger.warning(f'Failed to update linked_file for {item_key}: {e}')
+    return False
+
+
 def get_item_fulltext(zot: zotero.Zotero | None = None, item_key: str = "") -> str:
     """
     获取论文的全文内容（Zotero 内置的全文索引）

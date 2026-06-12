@@ -79,6 +79,11 @@ def _ingest_paper(
         logger.warning(f"  skip: no PDF")
         return 0
 
+    # 1.5 Auto-archive PDF to permanent storage
+    pdf_path = paper_importer._archive_pdf(pdf_path, item)
+    # Update Zotero linked_file if the PDF was moved
+    zotero_sync.update_linked_file_path(key, str(pdf_path.resolve()))
+
     # 2. MinerU parse
     markdown_text = pdf_parser.parse_pdf(pdf_path, item_key=key, force=force_parse)
     if not markdown_text.strip():
