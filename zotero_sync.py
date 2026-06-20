@@ -13,6 +13,7 @@ Zotero Sync - 从 Zotero 文献库拉取数据
 import shutil
 import logging
 import time
+import re
 from pathlib import Path
 
 import config
@@ -22,9 +23,19 @@ logger = logging.getLogger(__name__)
 
 # pyzotero single request limit
 _PAGE_SIZE = 100
+_PAGE_FETCH_RETRIES = 5
 
 # Non-paper types, skip
 _SKIP_TYPES = {"attachment", "note", "annotation"}
+
+_PDF_ATTACHMENT_CACHE_READY = False
+_PDF_ATTACHMENT_CACHE: dict[str, list[dict]] = {}
+
+
+def _safe_filename(value: str) -> str:
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', "_", str(value or "").strip())
+    name = re.sub(r"\s+", " ", name).strip(" .")
+    return name or "attachment.pdf"
 
 
 def _get_client() -> zotero.Zotero:
@@ -34,6 +45,38 @@ def _get_client() -> zotero.Zotero:
         config.ZOTERO_LIBRARY_TYPE,
         config.ZOTERO_API_KEY,
     )
+
+
+def _refresh_pdf_attachment_cache(raw_items: list) -> None:
+    """Build parent item -> PDF attachment metadata from an all-items fetch."""
+    global _PDF_ATTACHMENT_CACHE_READY, _PDF_ATTACHMENT_CACHE
+    cache: dict[str, list[dict]] = {}
+    for item in raw_items:
+        data = item.get("data", {})
+        if data.get("itemType") != "attachment":
+            continue
+        if data.get("contentType") != "application/pdf":
+            continue
+        parent = data.get("parentItem")
+        if parent:
+            cache.setdefault(parent, []).append(data)
+    _PDF_ATTACHMENT_CACHE = cache
+    _PDF_ATTACHMENT_CACHE_READY = True
+    logger.info(f"PDF attachment cache ready: {sum(len(v) for v in cache.values())} PDFs for {len(cache)} parent items")
+
+
+def _get_pdf_attachments(zot: zotero.Zotero, item_key: str) -> list[dict]:
+    """Return PDF child attachment metadata, using the list_items cache when available."""
+    if _PDF_ATTACHMENT_CACHE_READY:
+        return _PDF_ATTACHMENT_CACHE.get(item_key, [])
+
+    children = zot.children(item_key)
+    attachments = []
+    for child in children:
+        data = child["data"]
+        if data.get("contentType", "") == "application/pdf":
+            attachments.append(data)
+    return attachments
 
 
 def list_collections(zot: zotero.Zotero | None = None) -> list[dict]:
@@ -68,10 +111,29 @@ def _fetch_all_items(zot: zotero.Zotero, collection_key: str | None = None) -> l
     start = 0
 
     while True:
-        if collection_key:
-            batch = zot.collection_items(collection_key, limit=_PAGE_SIZE, start=start)
+        last_error = None
+        for attempt in range(_PAGE_FETCH_RETRIES):
+            try:
+                if collection_key:
+                    batch = zot.collection_items(collection_key, limit=_PAGE_SIZE, start=start)
+                else:
+                    batch = zot.items(limit=_PAGE_SIZE, start=start)
+                break
+            except Exception as exc:
+                last_error = exc
+                if attempt < _PAGE_FETCH_RETRIES - 1:
+                    wait = min((attempt + 1) * 5, 60)
+                    logger.warning(
+                        "  Zotero page fetch failed at start=%s; retry %s/%s in %ss: %s",
+                        start,
+                        attempt + 1,
+                        _PAGE_FETCH_RETRIES,
+                        wait,
+                        exc,
+                    )
+                    time.sleep(wait)
         else:
-            batch = zot.items(limit=_PAGE_SIZE, start=start)
+            raise RuntimeError(f"Zotero page fetch failed at start={start}") from last_error
 
         if not batch:
             break
@@ -96,12 +158,7 @@ def _item_has_pdf(zot: zotero.Zotero, item_key: str) -> bool:
     需要调 children() API 查询。
     """
     try:
-        children = zot.children(item_key)
-        for child in children:
-            data = child["data"]
-            content_type = data.get("contentType", "")
-            if content_type == "application/pdf":
-                return True
+        return bool(_get_pdf_attachments(zot, item_key))
     except Exception as e:
         logger.debug(f"查询子条目失败 ({item_key}): {e}")
     return False
@@ -126,7 +183,7 @@ def list_items(
         "year": 2024,
         "doi": "10.1038/...",
         "item_type": "journalArticle",
-        "collection_names": ["钠电层状氧化物正极"],
+        "collection_names": ["示例研究主题"],
         "has_pdf": True,
         "abstract": "...",
     }, ...]
@@ -141,6 +198,8 @@ def list_items(
 
     # Paginate to fetch all items
     raw_items = _fetch_all_items(zot, collection_key)
+    if collection_key is None:
+        _refresh_pdf_attachment_cache(raw_items)
 
     result = []
     total = len(raw_items)
@@ -195,6 +254,9 @@ def list_items(
             "year": year,
             "doi": data.get("DOI", ""),
             "item_type": data["itemType"],
+            "journal": data.get("publicationTitle", ""),
+            "journal_abbreviation": data.get("journalAbbreviation", ""),
+            "issn": data.get("ISSN", ""),
             "url": data.get("url", ""),
             "abstract": data.get("abstractNote", ""),
             "collection_names": collection_names,
@@ -210,14 +272,7 @@ def get_item_pdf_keys(zot: zotero.Zotero | None = None, item_key: str = "") -> l
     if zot is None:
         zot = _get_client()
 
-    children = zot.children(item_key)
-    pdf_keys = []
-    for child in children:
-        data = child["data"]
-        content_type = data.get("contentType", "")
-        if content_type == "application/pdf":
-            pdf_keys.append(data["key"])
-    return pdf_keys
+    return [data["key"] for data in _get_pdf_attachments(zot, item_key) if data.get("key")]
 
 
 def download_pdf(
@@ -243,11 +298,19 @@ def download_pdf(
     if zot is None:
         zot = _get_client()
 
+    try:
+        pdf_attachments = _get_pdf_attachments(zot, item_key)
+    except Exception as e:
+        logger.debug(f"附件查询失败: {e}")
+        pdf_attachments = []
+
     # === 1. Zotero linked_file 附件路径（data/papers/ 永久存储）===
-    linked_path = _get_linked_file_path(zot, item_key)
-    if linked_path and Path(linked_path).exists():
-        logger.info(f"PDF found via linked_file: {linked_path}")
-        return Path(linked_path)
+    for data in pdf_attachments:
+        if data.get("linkMode") == "linked_file":
+            linked_path = data.get("path", "")
+            if linked_path and Path(linked_path).exists():
+                logger.info(f"PDF found via linked_file: {linked_path}")
+                return Path(linked_path)
 
     # === 2. parsed/{key}/ 旧缓存中的 PDF（向后兼容）===
     parsed_dir = config.PARSED_DIR / item_key
@@ -258,9 +321,8 @@ def download_pdf(
                 return f
 
     # === 3. Zotero 本地 storage ===
-    pdf_keys = get_item_pdf_keys(zot, item_key)
-    if pdf_keys:
-        pdf_key = pdf_keys[0]
+    if pdf_attachments:
+        pdf_key = pdf_attachments[0]["key"]
         local_dir = config.ZOTERO_LOCAL_STORAGE / pdf_key
         if local_dir.is_dir():
             for f in local_dir.iterdir():
@@ -269,16 +331,37 @@ def download_pdf(
                     return f
 
     # === 4. Zotero API 云端下载 → 存到 data/papers/（不再存 parsed/）===
-    if pdf_keys:
-        pdf_key = pdf_keys[0]
+    if pdf_attachments:
+        pdf_data = pdf_attachments[0]
+        pdf_key = pdf_data["key"]
         papers_dir = config.PAPERS_DIR
         papers_dir.mkdir(parents=True, exist_ok=True)
         try:
-            zot.dump(pdf_key, str(papers_dir))
-            for f in papers_dir.iterdir():
-                if f.suffix == ".pdf":
-                    logger.info(f"PDF downloaded from Zotero API: {f}")
-                    return f
+            filename = _safe_filename(pdf_data.get("filename") or f"{pdf_key}.pdf")
+            if not filename.lower().endswith(".pdf"):
+                filename = f"{filename}.pdf"
+            final_path = papers_dir / f"{item_key}__{pdf_key}__{filename}"
+            if final_path.exists() and final_path.stat().st_size > 1000:
+                logger.info(f"PDF found in Zotero API cache: {final_path}")
+                return final_path
+
+            staging_dir = papers_dir / ".tmp" / f"{item_key}__{pdf_key}__{int(time.time() * 1000)}"
+            staging_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                zot.dump(pdf_key, path=str(staging_dir))
+                candidates = [
+                    p for p in staging_dir.rglob("*.pdf")
+                    if p.is_file() and p.stat().st_size > 1000
+                ]
+                candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                if candidates:
+                    if final_path.exists():
+                        final_path.unlink()
+                    shutil.move(str(candidates[0]), str(final_path))
+                    logger.info(f"PDF downloaded from Zotero API: {final_path}")
+                    return final_path
+            finally:
+                shutil.rmtree(staging_dir, ignore_errors=True)
         except Exception as e:
             logger.debug(f"API 下载失败: {e}")
 
@@ -289,9 +372,7 @@ def download_pdf(
 def _get_linked_file_path(zot: zotero.Zotero, item_key: str) -> str | None:
     """检查论文的附件中是否有 linked_file 模式，返回其路径。"""
     try:
-        children = zot.children(item_key)
-        for child in children:
-            data = child["data"]
+        for data in _get_pdf_attachments(zot, item_key):
             if data.get("linkMode") == "linked_file" and data.get("contentType") == "application/pdf":
                 path = data.get("path", "")
                 if path:
@@ -350,7 +431,7 @@ def list_folders(zot: zotero.Zotero | None = None) -> list[dict]:
     """
     列出 Zotero 中所有 Collection（文件夹）及其论文数量。
 
-    返回: [{"key": "ABC123", "name": "钠电层状氧化物正极", "item_count": 45}, ...]
+    返回: [{"key": "ABC123", "name": "示例研究主题", "item_count": 45}, ...]
     """
     if zot is None:
         zot = _get_client()
@@ -529,7 +610,7 @@ def sync_all(
         "collections": [...],
         "items": [...],
         "stats": {"total": 150, "with_pdf": 120, "no_pdf": 30},
-        "by_collection": {"钠电层状氧化物正极": 80, ...},
+        "by_collection": {"示例研究主题": 80, ...},
     }
     """
     zot = _get_client()

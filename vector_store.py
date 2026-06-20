@@ -46,7 +46,7 @@ def add_chunks(chunks: list[Chunk], collection_name: str) -> int:
     logger.info(f"  向量化 {len(docs)} chunks...")
     vecs = embed_batch(docs)
 
-    col.add(ids=ids, documents=docs, metadatas=metas, embeddings=vecs)
+    col.upsert(ids=ids, documents=docs, metadatas=metas, embeddings=vecs)
     logger.info(f"  ✓ {len(ids)} chunks → {col.name}")
     return len(ids)
 
@@ -284,8 +284,8 @@ def create_collection(
     创建 ChromaDB Collection，同时注册中英文映射 + 写入 Zotero 关联 metadata。
 
     Args:
-        collection_name: 中文名（如 "钠电层状氧化物正极"）
-        chroma_name: ChromaDB 安全名（如 "sodium-layered-oxide-cathode"）
+        collection_name: 中文名（如 "示例研究主题"）
+        chroma_name: ChromaDB 安全名（如 "example-topic"）
         zotero_folder_key: 对应 Zotero Collection key（可选）
 
     Returns: ChromaDB collection name

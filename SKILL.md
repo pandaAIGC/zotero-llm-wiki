@@ -163,7 +163,7 @@ MinerU 解析时从 PDF 中提取所有图片，保存在 `parsed/{KEY}/images/`
 
 ### 5. Collection 参数统一用中文名
 
-所有工具的 `collection` 参数都接受中文文件夹名（如"钠电层状氧化物正极"），内部自动查 `collection_map.json` 映射到 ChromaDB slug。
+所有工具的 `collection` 参数都接受中文文件夹名（如"示例研究主题"），内部自动查 `collection_map.json` 映射到 ChromaDB slug。
 
 ### 6. 操作前先 list_collections
 
@@ -270,7 +270,7 @@ ChromaDB 只接受 `[a-z0-9._-]`（3-512 字符，首尾必须 a-z0-9）。
 
 | 中文名 | 英文 slug |
 |--------|-----------|
-| 钠电层状氧化物正极 | `sodium-layered-oxide-cathode` |
+| 示例研究主题 | `example-topic` |
 | 固态电解质 | `solid-electrolyte` |
 | 钠离子电池 | `sodium-ion-battery` |
 | 火焰喷雾热解 | `flame-spray-pyrolysis` |

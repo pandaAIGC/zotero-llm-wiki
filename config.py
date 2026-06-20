@@ -33,8 +33,9 @@ ZOTERO_LIBRARY_TYPE = _e("ZOTERO_LIBRARY_TYPE", "user")  # "user" or "group"
 DEFAULT_COLLECTION = "uncategorized"  # Papers not belonging to any Collection
 MINERU_TOKEN = _e("MINERU_TOKEN")
 MINERU_MODEL = "vlm"
+MINERU_HTTP_TIMEOUT = float(_e("MINERU_HTTP_TIMEOUT", "600.0"))
 ZHIPU_API_KEY = _e("ZHIPU_API_KEY")
-UNPAYWALL_EMAIL = _e("UNPAYWALL_EMAIL", "zoterobrain@gmail.com")
+UNPAYWALL_EMAIL = _e("UNPAYWALL_EMAIL", "")
 OPENALEX_EMAIL = _e("OPENALEX_EMAIL", UNPAYWALL_EMAIL)  # polite pool, faster responses
 CORE_API_KEY = _e("CORE_API_KEY", "")  # https://core.ac.uk free to apply
 
@@ -44,7 +45,7 @@ DATA_DIR = PROJECT_DIR / "data"
 CHROMA_DIR = DATA_DIR / "chroma_db"
 PARSED_DIR = PROJECT_DIR / "parsed"
 PAPERS_DIR = DATA_DIR / "papers"          # 永久 PDF 存储（linked_file 指向这里）
-ZOTERO_LOCAL_STORAGE = Path(os.path.expanduser(r"~\Zotero\storage"))
+ZOTERO_LOCAL_STORAGE = Path(_e("ZOTERO_LOCAL_STORAGE", os.path.expanduser(r"~\Zotero\storage")))
 for _d in [CHROMA_DIR, PARSED_DIR, DATA_DIR, PAPERS_DIR]:
     _d.mkdir(parents=True, exist_ok=True)
 
@@ -53,8 +54,10 @@ for _d in [CHROMA_DIR, PARSED_DIR, DATA_DIR, PAPERS_DIR]:
 ZHIPU_EMBED_URL = "https://open.bigmodel.cn/api/paas/v4/embeddings"
 ZHIPU_MODEL = "embedding-3"
 ZHIPU_DIM = 2048
-ZHIPU_MAX_BATCH = 64       # Official limit: 64 items
+ZHIPU_MAX_BATCH = int(_e("ZHIPU_MAX_BATCH", "8"))  # Official limit: 64 items
 ZHIPU_MAX_CHARS = 6000     # Safe truncation for ~3072 tokens
+ZHIPU_BATCH_SLEEP_SECONDS = float(_e("ZHIPU_BATCH_SLEEP_SECONDS", "2.0"))
+ZHIPU_RETRY_BASE_SECONDS = float(_e("ZHIPU_RETRY_BASE_SECONDS", "3.0"))
 
 # -- Collection name mapping --
 # ChromaDB naming rules: 3-512 chars, [a-z0-9._-], must start/end with a-z0-9

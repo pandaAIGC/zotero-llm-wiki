@@ -17,15 +17,33 @@ logger = logging.getLogger(__name__)
 # Global os.environ.pop would pollute httpx clients in other modules like paper_discovery.
 _client = httpx.Client(timeout=60, follow_redirects=True, proxy=None, trust_env=False)
 
-def _post(headers, json, retries=3):
+def _post(headers, json, retries=5):
     for i in range(1, retries + 1):
         try:
-            return _client.post(config.ZHIPU_EMBED_URL, headers=headers, json=json)
+            resp = _client.post(config.ZHIPU_EMBED_URL, headers=headers, json=json)
+            if resp.status_code == 429 or 500 <= resp.status_code < 600:
+                if i == retries:
+                    return resp
+                retry_after = resp.headers.get("retry-after")
+                if retry_after:
+                    try:
+                        delay = float(retry_after)
+                    except ValueError:
+                        delay = config.ZHIPU_RETRY_BASE_SECONDS * i
+                else:
+                    delay = config.ZHIPU_RETRY_BASE_SECONDS * i
+                logger.warning(
+                    "  Embedding API returned HTTP %s; retrying in %.1fs (%s/%s)",
+                    resp.status_code, delay, i, retries,
+                )
+                time.sleep(delay)
+                continue
+            return resp
         except (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError,
                 httpx.ReadTimeout, httpx.WriteError, httpx.PoolTimeout) as e:
             if i == retries:
                 raise
-            time.sleep(2 ** i)
+            time.sleep(config.ZHIPU_RETRY_BASE_SECONDS * i)
 
 def _embed_one(text: str) -> list[float]:
     """单条向量化"""
@@ -39,7 +57,7 @@ def _embed_one(text: str) -> list[float]:
     return data["data"][0]["embedding"]
 
 def embed_batch(texts: list[str]) -> list[list[float]]:
-    """批量向量化（每批最多 64 条，截断到 6000 chars）"""
+    """批量向量化（默认小批量，截断到 6000 chars）"""
     results = []
     for start in range(0, len(texts), config.ZHIPU_MAX_BATCH):
         batch = texts[start:start + config.ZHIPU_MAX_BATCH]
@@ -68,5 +86,5 @@ def embed_batch(texts: list[str]) -> list[list[float]]:
                     time.sleep(0.1)
                 continue
             raise
-        time.sleep(0.3)  # 限流
+        time.sleep(config.ZHIPU_BATCH_SLEEP_SECONDS)  # 限流
     return results

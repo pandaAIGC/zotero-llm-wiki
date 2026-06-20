@@ -27,6 +27,23 @@ MAX_RETRIES = 3
 _API_BASE = "https://mineru.net/api/v4"
 _POLL_INTERVAL_START = 2.0
 _POLL_INTERVAL_MAX = 30.0
+_DOWNLOAD_RETRIES = 3
+
+
+def _get_bytes_with_retries(client: httpx.Client, url: str) -> bytes:
+    last_error = None
+    for attempt in range(_DOWNLOAD_RETRIES):
+        try:
+            resp = client.get(url)
+            resp.raise_for_status()
+            return resp.content
+        except Exception as exc:
+            last_error = exc
+            if attempt < _DOWNLOAD_RETRIES - 1:
+                wait = (attempt + 1) * 10
+                logger.warning(f"  Result download retry {attempt + 1}/{_DOWNLOAD_RETRIES}: {exc}, waiting {wait}s...")
+                time.sleep(wait)
+    raise RuntimeError(f"Result download failed after {_DOWNLOAD_RETRIES} attempts: {last_error}")
 
 
 def _count_pages(pdf_path: str) -> int:
@@ -131,9 +148,8 @@ def _download_results(client: httpx.Client, results: list[dict]) -> list[tuple[s
         # New API: full_zip_url contains everything (md + images)
         zip_url = r.get("full_zip_url") or r.get("markdown_url")
         if zip_url:
-            zip_resp = client.get(zip_url)
-            zip_resp.raise_for_status()
-            with zipfile.ZipFile(io.BytesIO(zip_resp.content)) as zf:
+            zip_bytes = _get_bytes_with_retries(client, zip_url)
+            with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
                 for name in zf.namelist():
                     if name.endswith(".md") and not md_text:
                         md_text = zf.read(name).decode("utf-8")
@@ -145,9 +161,7 @@ def _download_results(client: httpx.Client, results: list[dict]) -> list[tuple[s
             for img_info in r["content_list"]:
                 if img_info.get("type") == "image" and img_info.get("img_path"):
                     img_url = img_info["img_path"]
-                    img_resp = client.get(img_url)
-                    img_resp.raise_for_status()
-                    images.append((Path(img_url).name, img_resp.content))
+                    images.append((Path(img_url).name, _get_bytes_with_retries(client, img_url)))
 
         outputs.append((md_text, images))
     return outputs
@@ -199,7 +213,12 @@ def parse_pdf(
 
     with httpx.Client(
         headers={"Authorization": f"Bearer {config.MINERU_TOKEN}"},
-        timeout=30.0,
+        timeout=httpx.Timeout(
+            connect=30.0,
+            read=config.MINERU_HTTP_TIMEOUT,
+            write=config.MINERU_HTTP_TIMEOUT,
+            pool=30.0,
+        ),
     ) as client:
         # network_helper.install() is already globally installed at mcp_server startup,
         # all httpx requests auto-routed to direct connect for mineru.net, no extra handling needed.

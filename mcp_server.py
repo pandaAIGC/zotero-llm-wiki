@@ -171,7 +171,7 @@ async def list_tools() -> list[Tool]:
                     "collections": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "指定搜索的 Collection 列表（如 ['钠电层状氧化物正极']），留空表示搜索全部",
+                        "description": "指定搜索的 Collection 列表（如 ['示例研究主题']），留空表示搜索全部",
                     },
                     "paper_keys": {
                         "type": "array",
@@ -270,7 +270,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "collection": {
                         "type": "string",
-                        "description": "Zotero 文件夹中文名（可选，如 '钠电层状氧化物正极'）",
+                        "description": "Zotero 文件夹中文名（可选，如 '示例研究主题'）",
                     },
                 },
                 "required": ["title"],
@@ -292,7 +292,7 @@ async def list_tools() -> list[Tool]:
                     },
                     "collection": {
                         "type": "string",
-                        "description": "目标 Collection 中文名（可选，如 '钠电层状氧化物正极'）",
+                        "description": "目标 Collection 中文名（可选，如 '示例研究主题'）",
                     },
                     "force": {
                         "type": "boolean",
@@ -319,11 +319,11 @@ async def list_tools() -> list[Tool]:
                 "properties": {
                     "folder_name": {
                         "type": "string",
-                        "description": "Zotero 文件夹中文名（如 '钠电层状氧化物正极'）",
+                        "description": "Zotero 文件夹中文名（如 '示例研究主题'）",
                     },
                     "chroma_name": {
                         "type": "string",
-                        "description": "ChromaDB 英文 slug（如 'sodium-layered-oxide-cathode'）。要求: 3-512 字符, [a-z0-9._-], 首尾 a-z0-9",
+                        "description": "ChromaDB 英文 slug（如 'example-topic'）。要求: 3-512 字符, [a-z0-9._-], 首尾 a-z0-9",
                     },
                 },
                 "required": ["folder_name", "chroma_name"],
@@ -765,7 +765,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConte
             return [TextContent(type="text", text=(
                 f"❌ ChromaDB 名称 '{chroma_name}' 不合法。\n"
                 f"要求: 3-512 字符, [a-z0-9._-], 首尾必须 a-z0-9\n"
-                f"示例: 'sodium-layered-oxide-cathode'"
+                f"示例: 'example-topic'"
             ))]
 
         def _do_create():
