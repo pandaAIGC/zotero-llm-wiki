@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -194,17 +195,39 @@ def _merge_companion_output_log(log: dict[str, Any], log_path: Path | None, tail
     return log
 
 
+def _is_ingest_running() -> bool:
+    if os.name != "nt":
+        return False
+    command = (
+        "Get-CimInstance Win32_Process | "
+        "Where-Object { $_.Name -match 'python' -and $_.CommandLine -like '*run_ingest.py*' } | "
+        "Select-Object -First 1 -ExpandProperty ProcessId"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", command],
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+    except Exception:
+        return False
+    return bool(result.stdout.strip())
+
+
 def _decide_status(
     stats: dict[str, Any] | None,
     log: dict[str, Any],
     chroma_total: int,
     parsed_count: int,
     duplicate_hashes: list[dict[str, Any]],
+    ingest_running: bool,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     signals = log.get("signals") or {}
 
-    if log.get("last_progress") and int(signals.get("stats_saved") or 0) == 0:
+    if ingest_running and log.get("last_progress") and int(signals.get("stats_saved") or 0) == 0:
         progress = log["last_progress"]
         return "running", [
             "ingest log shows current progress but has not reached Stats saved yet",
@@ -219,9 +242,18 @@ def _decide_status(
         reasons.append(f"hard error signals in log: {', '.join(hard_errors)}")
 
     if not stats:
-        if log.get("last_progress"):
+        if ingest_running and log.get("last_progress"):
             return "running", ["ingest log has progress but stats were not refreshed yet"]
         return "fail", ["missing last_ingest_stats.json"]
+
+    if log.get("last_progress") and int(signals.get("stats_saved") or 0) == 0:
+        progress = log["last_progress"]
+        reasons.append(
+            "ingest process is not running, but the selected log ended before Stats saved"
+        )
+        reasons.append(
+            f"last incomplete progress: {progress.get('current')}/{progress.get('total')} {progress.get('key')}"
+        )
 
     if stats.get("_error"):
         return "fail", [f"stats JSON unreadable: {stats['_error']}"]
@@ -278,7 +310,10 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
     log = _merge_companion_output_log(_scan_log(log_path, tail_limit), log_path, tail_limit)
     review = _latest_review(output_dir)
     duplicate_hashes = _parsed_duplicate_hashes()
-    status, reasons = _decide_status(stats, log, chroma_total, len(parsed), duplicate_hashes)
+    ingest_running = _is_ingest_running()
+    status, reasons = _decide_status(
+        stats, log, chroma_total, len(parsed), duplicate_hashes, ingest_running
+    )
 
     audit = {
         "created": now.isoformat(timespec="seconds"),
@@ -292,6 +327,7 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
         "chroma_total_chunks": chroma_total,
         "collections": collections,
         "latest_review": review,
+        "ingest_running": ingest_running,
         "log": log,
     }
 
