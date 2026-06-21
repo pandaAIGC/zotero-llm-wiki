@@ -1,6 +1,6 @@
-# Zotero Brain Wiki 维护规则
+# Zotero LLM Wiki 维护规则
 
-本目录是 Zotero Brain 在 Obsidian 中维护的长期文献 wiki。它不是原始文献库，也不是最终结论库，而是介于 Zotero/parsed/ChromaDB 与人工知识整理之间的可增长 Markdown 知识层。
+本目录是 Zotero LLM Wiki 在 Obsidian 中维护的长期文献 wiki。它不是原始文献库，也不是最终结论库，而是介于 Zotero/parsed/ChromaDB 与人工知识整理之间的可增长 Markdown 知识层。
 
 ## 三层架构
 
@@ -31,9 +31,9 @@
 脚本维护的内容位于：
 
 ```markdown
-<!-- ZOTERO_BRAIN_WIKI:BEGIN -->
+<!-- ZOTERO_LLM_WIKI:BEGIN -->
 ...
-<!-- ZOTERO_BRAIN_WIKI:END -->
+<!-- ZOTERO_LLM_WIKI:END -->
 ```
 
 再次同步时只更新该区块和受管页面标题/frontmatter。人工笔记、人工整理、可转化为 Wiki 的结论等区块必须保留。
@@ -52,7 +52,7 @@
 
 1. 先读 `index.md` 和相关 collection/topic 页。
 2. 再读具体 literature 页。
-3. 若需要更细证据，再使用 Zotero Brain MCP 或 parsed/ChromaDB 查原文片段。
+3. 若需要更细证据，再使用 Zotero LLM Wiki MCP 或 parsed/ChromaDB 查原文片段。
 4. 有价值的问题答案可以沉淀为新的 topic 页面或人工整理区。
 
 ### Lint

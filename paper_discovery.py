@@ -82,7 +82,7 @@ def _get_client() -> httpx.Client:
         _client = httpx.Client(
             timeout=_TIMEOUT,
             headers={
-                "User-Agent": f"ZoteroBrain/1.0 (mailto:{config.UNPAYWALL_EMAIL})",
+                "User-Agent": f"ZoteroLLMWiki/1.0 (mailto:{config.UNPAYWALL_EMAIL})",
             },
         )
     return _client
@@ -333,7 +333,7 @@ def _search_crossref(query: str, limit: int = 10) -> list[DiscoveredPaper]:
             "rows": str(limit),
             "select": "title,DOI,published,abstract,author,URL,link,is-referenced-by-count",
         }, headers={
-            "User-Agent": f"ZoteroBrain/1.0 (mailto:{config.UNPAYWALL_EMAIL})",
+            "User-Agent": f"ZoteroLLMWiki/1.0 (mailto:{config.UNPAYWALL_EMAIL})",
         })
         resp.raise_for_status()
         data = resp.json()

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Audit Zotero Brain ingest outputs without calling Zotero/MinerU APIs."""
+"""Audit Zotero LLM Wiki ingest outputs without calling Zotero/MinerU APIs."""
 from __future__ import annotations
 
 import argparse
@@ -301,7 +301,7 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
     json_path.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
 
     lines = [
-        f"# Zotero Brain Ingest Audit {stamp}",
+        f"# Zotero LLM Wiki Ingest Audit {stamp}",
         "",
         f"- Status: `{status}`",
         f"- Project: `{ROOT}`",

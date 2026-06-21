@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Zotero Brain 配置"""
+"""Zotero LLM Wiki 配置"""
 import os
 import json
 import logging

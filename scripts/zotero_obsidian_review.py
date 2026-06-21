@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Generate a Zotero review note for an Obsidian vault.
 
-This runner is intentionally conservative: it reads Zotero and Zotero Brain
+This runner is intentionally conservative: it reads Zotero and Zotero LLM Wiki
 state, then writes a dated review note into a standalone Obsidian folder. It
 does not modify Zotero, and it does not update concept pages automatically.
 """
@@ -231,13 +231,13 @@ def _ensure_output(output_dir: Path) -> tuple[Path, Path, Path]:
     log = output_dir / "log.md"
     if not index.exists():
         index.write_text(
-            "# Zotero Brain 文献复盘\n\n"
+            "# Zotero LLM Wiki 文献复盘\n\n"
             "这里保存 Zotero 定时复盘输出，用作进入 Med LLM-Wiki 前的筛选队列。\n\n"
             "## Reviews\n",
             encoding="utf-8",
         )
     if not log.exists():
-        log.write_text("# Zotero Brain Review Log\n", encoding="utf-8")
+        log.write_text("# Zotero LLM Wiki Review Log\n", encoding="utf-8")
     return index, log, reviews
 
 
@@ -259,7 +259,7 @@ def _append_log(log_path: Path, date_text: str, review_rel: str, counts: dict[st
 
 ## {date_text} zotero_review | automated literature review
 
-- Source: Zotero Web API (`{config.ZOTERO_LIBRARY_TYPE}` library `{config.ZOTERO_USER_ID}`), Zotero Brain local state
+- Source: Zotero Web API (`{config.ZOTERO_LIBRARY_TYPE}` library `{config.ZOTERO_USER_ID}`), Zotero LLM Wiki local state
 - Created:
   - `{review_rel}.md`
 - Updated:
@@ -310,7 +310,7 @@ def generate_review(output_dir: Path, recent_limit: int, candidates_limit: int, 
         "---",
         "type: zotero-review",
         f"created: {now.isoformat(timespec='seconds')}",
-        "source: Zotero Web API; Zotero Brain local state",
+        "source: Zotero Web API; Zotero LLM Wiki local state",
         "status: automated_review",
         "---",
         "",
@@ -372,7 +372,7 @@ def generate_review(output_dir: Path, recent_limit: int, candidates_limit: int, 
 
     lines += [
         "",
-        "## Zotero Brain 状态",
+        "## Zotero LLM Wiki 状态",
         "",
         f"- Project: `{ROOT}`",
         f"- ChromaDB: `{config.CHROMA_DIR}`",
@@ -399,7 +399,7 @@ def generate_review(output_dir: Path, recent_limit: int, candidates_limit: int, 
         "## Sources",
         "",
         f"- Zotero Web API library `{config.ZOTERO_USER_ID}`",
-        f"- Zotero Brain project `{ROOT}`",
+        f"- Zotero LLM Wiki project `{ROOT}`",
         f"- Obsidian output folder `{output_dir}`",
     ]
 

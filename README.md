@@ -1,8 +1,8 @@
 # Zotero LLM Wiki
 
-> 基于 Zotero Brain 的增强版：把 Zotero 文献库变成可语义搜索、可 AI 对话、可沉淀到 Obsidian 的 LLM Wiki。
+> 把 Zotero 文献库变成可语义搜索、可 AI 对话、可沉淀到 Obsidian 的 LLM Wiki。
 
-> Upstream: [Feplus2/zotero-brain](https://github.com/Feplus2/zotero-brain). This repository keeps the Zotero Brain MCP / ingestion core and adds an Obsidian LLM Wiki layer.
+> Built on an MIT-licensed Zotero literature MCP / ingestion core, with an added Obsidian LLM Wiki layer.
 
 > **For AI Agents:** 如果你是通过 MCP 使用本项目的 AI Agent，请先阅读 [SKILL.md](SKILL.md)。它包含项目架构、文件布局、操作规范和场景速查，能帮你避免常见错误（如找不到 PDF、重复下载、混淆缓存路径等）。
 
@@ -10,7 +10,7 @@
 
 Zotero 管理论文很好用，但它本质上是个死数据库——只能按标题、作者、标签搜索，不能按**意思**搜索。
 
-Zotero LLM Wiki 在 Zotero Brain 的基础上解决这个问题：
+Zotero LLM Wiki 解决这个问题：
 
 ```
 你的 Zotero 文献库
@@ -103,7 +103,7 @@ pip install -r requirements.txt
 
 ```bash
 # ============================================================
-# Zotero LLM Wiki / Zotero Brain - API 密钥配置
+# Zotero LLM Wiki - API 密钥配置
 # ============================================================
 
 # Zotero Web API（必填）
@@ -124,7 +124,7 @@ CORE_API_KEY=你的CORE API密钥
 
 ### 步骤 4：配置 MCP 客户端
 
-在你的 MCP 客户端（如 WorkBuddy、Cursor）中添加 Zotero Brain / Zotero LLM Wiki：
+在你的 MCP 客户端（如 WorkBuddy、Cursor）中添加 Zotero LLM Wiki：
 
 **WorkBuddy：** 在设置 → 连接器 → MCP 中添加，command 为：
 ```
@@ -136,7 +136,7 @@ CORE_API_KEY=你的CORE API密钥
 ```json
 {
   "mcpServers": {
-    "zotero-brain": {
+    "zotero-llm-wiki": {
       "command": ".venv/Scripts/python.exe",
       "args": ["mcp_server.py"],
       "cwd": "/path/to/zotero-llm-wiki"
@@ -157,7 +157,7 @@ CORE_API_KEY=你的CORE API密钥
 
 ### 步骤 6：生成 Obsidian LLM Wiki
 
-本增强版支持把 Zotero Brain 读到的元数据、parsed 缓存和 ChromaDB 状态沉淀为 Obsidian Markdown wiki。
+本增强版支持把 Zotero LLM Wiki 读到的元数据、parsed 缓存和 ChromaDB 状态沉淀为 Obsidian Markdown wiki。
 
 ```bash
 .venv\Scripts\python.exe scripts/zotero_obsidian_wiki.py ^
@@ -197,9 +197,9 @@ wiki/
 脚本只读 Zotero、`parsed/` 和 ChromaDB，不启动 `run_ingest.py`，不调用 MinerU/Zhipu，不修改 Zotero。生成页使用 managed block：
 
 ```markdown
-<!-- ZOTERO_BRAIN_WIKI:BEGIN -->
+<!-- ZOTERO_LLM_WIKI:BEGIN -->
 ...
-<!-- ZOTERO_BRAIN_WIKI:END -->
+<!-- ZOTERO_LLM_WIKI:END -->
 ```
 
 再次同步时只更新 managed block、受管标题和 frontmatter；区块外的人工笔记会保留。
@@ -245,7 +245,7 @@ lint 会检查：
 
 > **为什么必须 TUN？** 因为 MCP Server 跑在本地进程里（不经过浏览器），只有 TUN 模式才能在系统层面接管所有网络请求。普通 HTTP 代理对命令行程序不生效。
 
-**Zotero Brain 已内置 `network_helper.py`**，会自动将 MinerU（mineru.net）的流量绕过 TUN 走直连。但你需要确保：
+**Zotero LLM Wiki 已内置 `network_helper.py`**，会自动将 MinerU（mineru.net）的流量绕过 TUN 走直连。但你需要确保：
 
 1. **代理软件 TUN 模式已开启**（不是"建议"，是"必须"，否则境外 API 全部超时）
 2. 代理规则中 OpenAlex/Unpaywall/CrossRef 等域名走代理节点
@@ -267,7 +267,7 @@ zotero-llm-wiki/
 ├── config.py              # 配置加载（.env → Python）
 ├── run_ingest.py          # 批量入库脚本
 ├── scripts/
-│   ├── zotero_obsidian_wiki.py       # Zotero Brain → Obsidian LLM Wiki
+│   ├── zotero_obsidian_wiki.py       # Zotero LLM Wiki → Obsidian LLM Wiki
 │   ├── zotero_obsidian_wiki_lint.py  # Wiki 健康检查
 │   ├── zotero_obsidian_review.py     # 每日复盘笔记
 │   └── zotero_ingest_audit.py        # 入库审计报告

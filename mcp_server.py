@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """
-MCP Server - expose Zotero Brain to WorkBuddy.
+MCP Server - expose Zotero LLM Wiki to WorkBuddy.
 
 Phase 4: 工具解耦 + Zotero-First 设计
 Tools provided (11):
@@ -43,7 +43,7 @@ logger = logging.getLogger(__name__)
 network_helper.install()
 
 # MCP Server instance
-server = Server("zotero-brain")
+server = Server("zotero-llm-wiki")
 
 
 # ============================================================================
@@ -542,7 +542,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConte
                 def _fetch_crossref():
                     return httpx.get(
                         f"https://api.crossref.org/works/{doi}",
-                        headers={"User-Agent": f"ZoteroBrain/1.0 (mailto:{config.UNPAYWALL_EMAIL})"},
+                        headers={"User-Agent": f"ZoteroLLMWiki/1.0 (mailto:{config.UNPAYWALL_EMAIL})"},
                         timeout=15,
                     )
                 resp = await _asyncio.to_thread(_fetch_crossref)
@@ -873,7 +873,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConte
                     def _fetch_crossref():
                         return httpx.get(
                             f"https://api.crossref.org/works/{identifier}",
-                            headers={"User-Agent": f"ZoteroBrain/1.0 (mailto:{config.UNPAYWALL_EMAIL})"},
+                            headers={"User-Agent": f"ZoteroLLMWiki/1.0 (mailto:{config.UNPAYWALL_EMAIL})"},
                             timeout=15,
                         )
                     resp = await _asyncio.to_thread(_fetch_crossref)
@@ -981,7 +981,7 @@ async def _dispatch_tool(name: str, arguments: dict[str, Any]) -> list[TextConte
 async def main():
     """Start MCP Server."""
     async with stdio_server() as (read_stream, write_stream):
-        logger.info("Zotero Brain MCP Server starting (Phase 4: 11 tools)")
+        logger.info("Zotero LLM Wiki MCP Server starting (Phase 4: 11 tools)")
         await server.run(
             read_stream,
             write_stream,

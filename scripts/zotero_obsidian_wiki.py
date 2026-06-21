@@ -1,4 +1,4 @@
-"""Build an Obsidian wiki layer from the local Zotero Brain library.
+"""Build an Obsidian wiki layer from the local Zotero LLM Wiki library.
 
 The script is read-only toward Zotero, parsed/, and ChromaDB. It writes
 managed Markdown pages into an Obsidian wiki folder while preserving manual
@@ -35,9 +35,9 @@ DEFAULT_VAULT_LINK_PREFIX = os.environ.get("ZOTERO_LLM_WIKI_LINK_PREFIX", "zoter
 DEFAULT_SCHEMA_TEMPLATE = ROOT / "templates" / "wiki" / "AGENTS.md"
 DEFAULT_LIMIT = 50
 VAULT_LINK_PREFIX = DEFAULT_VAULT_LINK_PREFIX
-BEGIN = "<!-- ZOTERO_BRAIN_WIKI:BEGIN -->"
-END = "<!-- ZOTERO_BRAIN_WIKI:END -->"
-MANAGED_BY = "zotero-brain-wiki"
+BEGIN = "<!-- ZOTERO_LLM_WIKI:BEGIN -->"
+END = "<!-- ZOTERO_LLM_WIKI:END -->"
+MANAGED_BY = "zotero-llm-wiki"
 EXCLUDED_TYPES = {"attachment", "note", "annotation"}
 
 
@@ -449,7 +449,7 @@ def _paper_managed_body(
         "",
         paper.abstract or "_Zotero 元数据中暂无摘要。_",
         "",
-        "## Zotero Brain 全文证据",
+        "## Zotero LLM Wiki 全文证据",
         "",
     ]
     if paper.chunk_previews:
@@ -705,7 +705,7 @@ def _write_index_and_status(
     index_lines.extend(["", END])
     _write_managed_page(
         output_dir / "index.md",
-        "Zotero Brain Wiki",
+        "Zotero LLM Wiki",
         "\n".join(index_lines),
         dry_run,
         actions,
@@ -735,7 +735,7 @@ def _write_index_and_status(
     status_lines.extend(["", END])
     _write_managed_page(
         output_dir / "status.md",
-        "Zotero Brain Wiki 状态",
+        "Zotero LLM Wiki 状态",
         "\n".join(status_lines),
         dry_run,
         actions,
@@ -765,7 +765,7 @@ def _append_log(
         filters.append("chroma_only=true")
     filter_text = "; ".join(filters) if filters else "无"
     entry = [
-        f"## [{stamp}] sync | Zotero Brain wiki",
+        f"## [{stamp}] sync | Zotero LLM Wiki wiki",
         "",
         f"- 查询：`{query}`",
         f"- 过滤：{filter_text}",
@@ -790,7 +790,7 @@ def _append_log(
     if path.exists():
         existing = path.read_text(encoding="utf-8")
     else:
-        existing = "# Zotero Brain Wiki 日志\n\n"
+        existing = "# Zotero LLM Wiki 日志\n\n"
     _write_text(path, existing.rstrip() + "\n\n" + "\n".join(entry).rstrip() + "\n", dry_run, actions)
 
 
@@ -834,7 +834,7 @@ def build_wiki(args: argparse.Namespace) -> list[str]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="将 Zotero Brain 文献库导出为 Obsidian wiki。")
+    parser = argparse.ArgumentParser(description="将 Zotero LLM Wiki 文献库导出为 Obsidian wiki。")
     parser.add_argument("--zotero-sqlite", type=Path, default=DEFAULT_ZOTERO_SQLITE)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--vault-link-prefix", default=DEFAULT_VAULT_LINK_PREFIX, help="Obsidian 内部链接前缀；例如 zotero-llm-wiki/wiki。")
@@ -854,7 +854,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     actions = build_wiki(args)
-    print(f"Zotero Brain wiki {'dry-run' if args.dry_run else '同步'}完成。")
+    print(f"Zotero LLM Wiki wiki {'dry-run' if args.dry_run else '同步'}完成。")
     print(f"操作数：{len(actions)}")
     for action in actions[:50]:
         print(f"- {action}")

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 r"""
-Zotero Brain - 批量入库脚本（MinerU 批量并行解析）
+Zotero LLM Wiki - 批量入库脚本（MinerU 批量并行解析）
 
 流水线:
   Phase 1: 下载/复制 PDF + 检查缓存
@@ -127,7 +127,7 @@ def _load_jcr_table(path: Path) -> dict[str, dict]:
     except ImportError as exc:
         raise RuntimeError(
             "openpyxl is required for --high-impact-only. "
-            "Install it in the Zotero Brain venv with: .\\.venv\\Scripts\\python.exe -m pip install openpyxl"
+            "Install it in the Zotero LLM Wiki venv with: .\\.venv\\Scripts\\python.exe -m pip install openpyxl"
         ) from exc
 
     wb = load_workbook(path, read_only=True, data_only=True)
@@ -448,7 +448,7 @@ def run(
 ):
     """运行完整入库管线"""
     print("=" * 60)
-    print("  Zotero Brain - 批量入库管线")
+    print("  Zotero LLM Wiki - 批量入库管线")
     print("=" * 60)
     print(f"  本地 Zotero:     {config.ZOTERO_LOCAL_STORAGE}")
     print(f"  ChromaDB:        {config.CHROMA_DIR}")
@@ -790,7 +790,7 @@ def run(
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Zotero Brain Batch Ingest")
+    parser = argparse.ArgumentParser(description="Zotero LLM Wiki Batch Ingest")
     parser.add_argument("--no-incremental", action="store_true", help="full ingest (ignore existing)")
     parser.add_argument("--incremental", action="store_true", help="only new papers (default)")
     parser.add_argument("--limit", type=int, default=0, help="max papers to process (0=all)")

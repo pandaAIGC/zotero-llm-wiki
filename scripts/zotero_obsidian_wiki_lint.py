@@ -1,4 +1,4 @@
-"""Health-check the Zotero Brain Obsidian wiki.
+"""Health-check the Zotero LLM Wiki Obsidian wiki.
 
 This is a read-only linter for the wiki content, except for writing a timestamped
 lint report under wiki/lint and appending a short entry to wiki/log.md.
@@ -17,8 +17,8 @@ from pathlib import Path
 
 DEFAULT_WIKI_DIR = Path(os.environ.get("ZOTERO_LLM_WIKI_DIR", Path.home() / "zotero-llm-wiki" / "wiki"))
 DEFAULT_VAULT_LINK_PREFIX = os.environ.get("ZOTERO_LLM_WIKI_LINK_PREFIX", "zotero-llm-wiki/wiki").strip("/")
-BEGIN = "<!-- ZOTERO_BRAIN_WIKI:BEGIN -->"
-END = "<!-- ZOTERO_BRAIN_WIKI:END -->"
+BEGIN = "<!-- ZOTERO_LLM_WIKI:BEGIN -->"
+END = "<!-- ZOTERO_LLM_WIKI:END -->"
 
 
 @dataclass
@@ -77,7 +77,7 @@ def _append_log(root: Path, status: str, issue_count: int, report_rel: str, dry_
         return
     path = root / "log.md"
     stamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    existing = path.read_text(encoding="utf-8") if path.exists() else "# Zotero Brain Wiki 日志\n\n"
+    existing = path.read_text(encoding="utf-8") if path.exists() else "# Zotero LLM Wiki 日志\n\n"
     entry = "\n".join(
         [
             f"## [{stamp}] lint | {status}",
@@ -95,7 +95,7 @@ def lint(root: Path, vault_link_prefix: str) -> tuple[str, list[str], dict[str, 
     by_rel = {p.rel: p for p in pages}
     inbound: Counter[str] = Counter()
     issues: list[str] = []
-    prefixes = [vault_link_prefix, "zotero-llm-wiki/wiki", "zoterobrain/wiki"]
+    prefixes = [vault_link_prefix, "zotero-llm-wiki/wiki", "ZoteroLLMWiki/wiki"]
     stats = {
         "pages": len(pages),
         "literature": 0,
@@ -157,7 +157,7 @@ def write_report(root: Path, status: str, issues: list[str], stats: dict[str, in
     report_dir = root / "lint"
     report_path = report_dir / f"{stamp}-wiki-lint.md"
     lines = [
-        f"# Zotero Brain Wiki 体检报告",
+        f"# Zotero LLM Wiki 体检报告",
         "",
         f"- 时间：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"- 状态：{status}",
@@ -186,7 +186,7 @@ def write_report(root: Path, status: str, issues: list[str], stats: dict[str, in
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="检查 Zotero Brain Obsidian wiki 的链接和维护状态。")
+    parser = argparse.ArgumentParser(description="检查 Zotero LLM Wiki Obsidian wiki 的链接和维护状态。")
     parser.add_argument("--wiki-dir", type=Path, default=DEFAULT_WIKI_DIR)
     parser.add_argument("--vault-link-prefix", default=DEFAULT_VAULT_LINK_PREFIX)
     parser.add_argument("--dry-run", action="store_true")
@@ -199,7 +199,7 @@ def main() -> None:
     report = write_report(args.wiki_dir, status, issues, stats, args.dry_run)
     rel = report.relative_to(args.wiki_dir).with_suffix("").as_posix()
     _append_log(args.wiki_dir, status, len(issues), rel, args.dry_run)
-    print(f"Zotero Brain wiki 体检完成：{status}")
+    print(f"Zotero LLM Wiki wiki 体检完成：{status}")
     print(f"问题数：{len(issues)}")
     print(f"报告：{report}")
 

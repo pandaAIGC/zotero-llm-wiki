@@ -1,18 +1,18 @@
 ---
-name: zotero-brain
+name: zotero-llm-wiki
 description: |
-  Zotero Brain MCP 工具使用指南。用于管理学术文献库：搜索论文、下载 PDF、导入 Zotero、
+  Zotero LLM Wiki MCP 工具使用指南。用于管理学术文献库：搜索论文、下载 PDF、导入 Zotero、
   向量化入库、语义引用推荐。当用户需要查找/下载/入库/引用学术论文时触发此 Skill。
   触发词：找论文、下载论文、入库、Zotero、BibTeX、引用推荐、文献库
 version: 2.1.0
 tags: [academic, zotero, literature, mcp]
 ---
 
-# Zotero Brain — 学术文献管理 MCP 工具
+# Zotero LLM Wiki — 学术文献管理 MCP 工具
 
 ## 概述
 
-Zotero Brain 是一个 MCP Server，提供 11 个工具用于学术文献全生命周期管理。
+Zotero LLM Wiki 是一个 MCP Server，提供 11 个工具用于学术文献全生命周期管理。
 核心理念：**Zotero 是用户看到的唯一视图**，ChromaDB 是内部实现细节。
 
 ---
