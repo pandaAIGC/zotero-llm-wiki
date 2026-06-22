@@ -39,15 +39,10 @@ UNPAYWALL_EMAIL = _e("UNPAYWALL_EMAIL", "")
 OPENALEX_EMAIL = _e("OPENALEX_EMAIL", UNPAYWALL_EMAIL)  # polite pool, faster responses
 CORE_API_KEY = _e("CORE_API_KEY", "")  # https://core.ac.uk free to apply
 
-# -- Paths --
-PROJECT_DIR = Path(__file__).parent
-DATA_DIR = PROJECT_DIR / "data"
-CHROMA_DIR = DATA_DIR / "chroma_db"
-PARSED_DIR = PROJECT_DIR / "parsed"
-PAPERS_DIR = DATA_DIR / "papers"          # 永久 PDF 存储（linked_file 指向这里）
-ZOTERO_LOCAL_STORAGE = Path(_e("ZOTERO_LOCAL_STORAGE", os.path.expanduser(r"~\Zotero\storage")))
-for _d in [CHROMA_DIR, PARSED_DIR, DATA_DIR, PAPERS_DIR]:
-    _d.mkdir(parents=True, exist_ok=True)
+# -- Embedding provider --
+EMBED_PROVIDER = _e("EMBED_PROVIDER", "zhipu").strip().lower()
+if EMBED_PROVIDER not in {"zhipu", "ollama"}:
+    raise ValueError(f"Unsupported EMBED_PROVIDER: {EMBED_PROVIDER}")
 
 # -- ZHIPU Embedding-3 (official docs: docs.bigmodel.cn) --
 # input supports string or string[], max 64 items per request, single item <=3072 tokens
@@ -58,6 +53,34 @@ ZHIPU_MAX_BATCH = int(_e("ZHIPU_MAX_BATCH", "8"))  # Official limit: 64 items
 ZHIPU_MAX_CHARS = 6000     # Safe truncation for ~3072 tokens
 ZHIPU_BATCH_SLEEP_SECONDS = float(_e("ZHIPU_BATCH_SLEEP_SECONDS", "2.0"))
 ZHIPU_RETRY_BASE_SECONDS = float(_e("ZHIPU_RETRY_BASE_SECONDS", "3.0"))
+
+# -- Ollama local embeddings --
+# Common options: nomic-embed-text, mxbai-embed-large, bge-m3.
+# Ollama embedding dimensions differ from Zhipu, so keep a separate ChromaDB.
+OLLAMA_BASE_URL = _e("OLLAMA_BASE_URL", "http://127.0.0.1:11434").rstrip("/")
+OLLAMA_EMBED_MODEL = _e("OLLAMA_EMBED_MODEL", "qwen3-embedding:latest")
+OLLAMA_EMBED_DIM = int(_e("OLLAMA_EMBED_DIM", "0"))  # 0 = infer from response
+OLLAMA_MAX_BATCH = int(_e("OLLAMA_MAX_BATCH", "8"))
+OLLAMA_MAX_CHARS = int(_e("OLLAMA_MAX_CHARS", "6000"))
+OLLAMA_BATCH_SLEEP_SECONDS = float(_e("OLLAMA_BATCH_SLEEP_SECONDS", "0.0"))
+
+EMBED_MODEL = ZHIPU_MODEL if EMBED_PROVIDER == "zhipu" else OLLAMA_EMBED_MODEL
+EMBED_DIM = ZHIPU_DIM if EMBED_PROVIDER == "zhipu" else OLLAMA_EMBED_DIM
+
+# -- Paths --
+PROJECT_DIR = Path(__file__).parent
+DATA_DIR = PROJECT_DIR / "data"
+_ollama_chroma_name = "chroma_db_ollama_" + "".join(
+    c if c.isalnum() or c in "._-" else "_"
+    for c in OLLAMA_EMBED_MODEL.lower()
+)
+_default_chroma_dir = DATA_DIR / ("chroma_db" if EMBED_PROVIDER == "zhipu" else _ollama_chroma_name)
+CHROMA_DIR = Path(_e("CHROMA_DIR", str(_default_chroma_dir)))
+PARSED_DIR = PROJECT_DIR / "parsed"
+PAPERS_DIR = DATA_DIR / "papers"          # 永久 PDF 存储（linked_file 指向这里）
+ZOTERO_LOCAL_STORAGE = Path(_e("ZOTERO_LOCAL_STORAGE", os.path.expanduser(r"~\Zotero\storage")))
+for _d in [CHROMA_DIR, PARSED_DIR, DATA_DIR, PAPERS_DIR]:
+    _d.mkdir(parents=True, exist_ok=True)
 
 # -- Collection name mapping --
 # ChromaDB naming rules: 3-512 chars, [a-z0-9._-], must start/end with a-z0-9

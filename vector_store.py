@@ -107,8 +107,17 @@ def get_paper_keys(collection_name: str) -> set[str]:
     safe = config.translate_collection_name(collection_name)
     client = _client()
     col = _get_collection(client, collection_name)
-    r = col.get(include=["metadatas"])
-    return {m["key"] for m in r["metadatas"] if "key" in m}
+    keys: set[str] = set()
+    limit = 5000
+    offset = 0
+    while True:
+        r = col.get(include=["metadatas"], limit=limit, offset=offset)
+        metadatas = r.get("metadatas") or []
+        keys.update(m["key"] for m in metadatas if m and "key" in m)
+        if len(metadatas) < limit:
+            break
+        offset += limit
+    return keys
 
 
 def exists_by_metadata(field: str, value: str) -> bool:

@@ -115,8 +115,17 @@ ZOTERO_LIBRARY_TYPE=user
 MINERU_TOKEN=你的MinerU Token
 MINERU_MODEL=vlm
 
-# 智谱 BigModel（必填 - 文本向量化）
+# 文本向量化（二选一）
+# 默认: zhipu，使用智谱 embedding-3，写入 data/chroma_db
+EMBED_PROVIDER=zhipu
 ZHIPU_API_KEY=你的智谱API密钥
+
+# 可选: ollama，使用本地 Ollama embedding，默认写入独立 ChromaDB
+# 不要和智谱 2048 维向量混入同一个 ChromaDB。
+# 推荐本机已有模型: qwen3-embedding:latest
+# EMBED_PROVIDER=ollama
+# OLLAMA_BASE_URL=http://127.0.0.1:11434
+# OLLAMA_EMBED_MODEL=qwen3-embedding:latest
 
 # CORE API（可选 - Open Access PDF 搜索）
 CORE_API_KEY=你的CORE API密钥
@@ -154,6 +163,23 @@ CORE_API_KEY=你的CORE API密钥
 ```
 
 这会把所有有 PDF 的论文解析并入库。之后新增的论文只需逐个 `ingest_paper` 即可。
+
+如果想控制 embedding 花费，可以给 Phase 3 加预算上限。达到上限后脚本会在下一篇 embedding API 调用前停止，并正常保存 stats：
+
+```bash
+.venv\Scripts\python.exe run_ingest.py --incremental --max-embed-papers 20
+.venv\Scripts\python.exe run_ingest.py --incremental --max-embed-chunks 2000
+```
+
+如果使用本地 Ollama embedding，建议先建一个独立索引，不覆盖现有智谱索引：
+
+```bash
+set EMBED_PROVIDER=ollama
+set OLLAMA_EMBED_MODEL=qwen3-embedding:latest
+.venv\Scripts\python.exe run_ingest.py --incremental --max-embed-papers 20
+```
+
+默认会写到 `data/chroma_db_ollama_qwen3-embedding_latest` 这类独立目录。不同 embedding 模型的向量维度不同，不能混在同一个 ChromaDB 里。
 
 ### 步骤 6：生成 Obsidian LLM Wiki
 

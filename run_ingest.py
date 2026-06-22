@@ -314,6 +314,37 @@ def _download_pdf_with_retries(item_key: str, attempts: int = 3) -> Path | None:
 
 def _process_paper(item: dict, markdown_text: str) -> int:
     """切块 + Embedding + 入库，返回 chunk 数量"""
+    key, chunks, target_collections = _prepare_paper_chunks(item, markdown_text)
+    return _process_prepared_paper(key, chunks, target_collections)
+
+
+def _process_prepared_paper(key: str, chunks: list, target_collections: list[str]) -> int:
+    """Embedding + Chroma upsert for chunks prepared by _prepare_paper_chunks."""
+    if not chunks:
+        logger.warning(f"  {key}: no chunks")
+        return 0
+
+    logger.info(
+        "  %s: processing %s chunks across %s collection(s): %s",
+        key,
+        len(chunks),
+        len(target_collections),
+        ", ".join(target_collections),
+    )
+    # Ensure all target collections have mappings
+    for col_name in target_collections:
+        _ensure_collection_mapping(col_name)
+
+    total = 0
+    for col_name in target_collections:
+        n = vector_store.add_chunks(chunks, collection_name=col_name)
+        total += n
+        logger.info(f"  {key}: {n} chunks -> [{col_name}]")
+    return total
+
+
+def _prepare_paper_chunks(item: dict, markdown_text: str) -> tuple[str, list, list[str]]:
+    """Prepare chunks without calling embedding, so budget checks are cheap."""
     key = item["key"]
     title = item.get("title", "?")
     paper_metadata = {
@@ -326,21 +357,8 @@ def _process_paper(item: dict, markdown_text: str) -> int:
         "abstract": item.get("abstract", ""),
     }
     chunks = chunker.chunk_markdown(markdown_text, paper_metadata=paper_metadata)
-    if not chunks:
-        logger.warning(f"  {key}: no chunks")
-        return 0
-
     target_collections = item.get("collection_names", [config.DEFAULT_COLLECTION])
-    # Ensure all target collections have mappings
-    for col_name in target_collections:
-        _ensure_collection_mapping(col_name)
-
-    total = 0
-    for col_name in target_collections:
-        n = vector_store.add_chunks(chunks, collection_name=col_name)
-        total += n
-        logger.info(f"  {key}: {n} chunks -> [{col_name}]")
-    return total
+    return key, chunks, target_collections
 
 
 def _submit_and_wait_batch(
@@ -445,6 +463,8 @@ def run(
     require_q1: bool = True,
     keep_unknown_journal: bool = False,
     dry_run: bool = False,
+    max_embed_papers: int = 0,
+    max_embed_chunks: int = 0,
 ):
     """运行完整入库管线"""
     print("=" * 60)
@@ -453,8 +473,12 @@ def run(
     print(f"  本地 Zotero:     {config.ZOTERO_LOCAL_STORAGE}")
     print(f"  ChromaDB:        {config.CHROMA_DIR}")
     print(f"  Parsed:          {config.PARSED_DIR}")
-    print(f"  Embedding:       {config.ZHIPU_MODEL}")
+    print(f"  Embedding:       {config.EMBED_PROVIDER}:{config.EMBED_MODEL}")
     print(f"  MinerU batch:    {mineru_batch_size}")
+    if max_embed_papers > 0:
+        print(f"  Embed budget:    max {max_embed_papers} papers")
+    if max_embed_chunks > 0:
+        print(f"  Embed budget:    max {max_embed_chunks} chunk writes")
     if high_impact_only:
         print(f"  High-impact:     JIF >= {min_impact_factor}" + (" and Q1" if require_q1 else ""))
     print()
@@ -731,10 +755,16 @@ def run(
         "failed": 0,
         "chunks": 0,
         "api_limited": parse_api_limited,
+        "embed_provider": config.EMBED_PROVIDER,
+        "embed_model": config.EMBED_MODEL,
+        "embed_budget_stopped": False,
+        "max_embed_papers": max_embed_papers or None,
+        "max_embed_chunks": max_embed_chunks or None,
         "suspect_pdf_duplicates": len(suspect_pdf_duplicate_keys),
         "exact_pdf_duplicate_skipped": exact_pdf_duplicate_skipped,
     }
 
+    embedded_papers = 0
     for i, (key, (item, markdown_text)) in enumerate(all_papers.items(), 1):
         title = item.get("title", "?")[:50]
         cols = ", ".join(item.get("collection_names", []))
@@ -742,10 +772,27 @@ def run(
         print(f"  Collection: {cols}")
 
         try:
-            n = _process_paper(item, markdown_text)
+            prepared_key, chunks, target_collections = _prepare_paper_chunks(item, markdown_text)
+            planned_chunk_writes = len(chunks) * max(1, len(target_collections))
+            if max_embed_papers > 0 and embedded_papers >= max_embed_papers:
+                logger.warning("    Embedding paper budget reached (%s); stopping before API call", max_embed_papers)
+                stats["embed_budget_stopped"] = True
+                break
+            if max_embed_chunks > 0 and planned_chunk_writes and stats["chunks"] + planned_chunk_writes > max_embed_chunks:
+                logger.warning(
+                    "    Embedding chunk budget reached (%s); next paper %s needs %s chunk writes, stopping before API call",
+                    max_embed_chunks,
+                    prepared_key,
+                    planned_chunk_writes,
+                )
+                stats["embed_budget_stopped"] = True
+                break
+
+            n = _process_prepared_paper(prepared_key, chunks, target_collections)
             if n > 0:
                 stats["success"] += 1
                 stats["chunks"] += n
+                embedded_papers += 1
             else:
                 stats["skipped"] += 1
         except Exception as e:
@@ -770,6 +817,7 @@ def run(
     print(f"  跳过:       {stats['skipped']} 篇")
     print(f"  失败:       {stats['failed']} 篇")
     print(f"  API限制停止: {'是' if stats['api_limited'] else '否'}")
+    print(f"  预算停止:   {'是' if stats['embed_budget_stopped'] else '否'}")
     print(f"  新增块:     {stats['chunks']} 个")
     print("=" * 60)
 
@@ -803,6 +851,8 @@ if __name__ == "__main__":
     parser.add_argument("--no-require-q1", action="store_true", help="allow non-Q1 journals if they pass min impact factor")
     parser.add_argument("--keep-unknown-journal", action="store_true", help="keep items whose journal cannot be matched in JCR")
     parser.add_argument("--dry-run", action="store_true", help="show selected candidates without parsing or embedding")
+    parser.add_argument("--max-embed-papers", type=int, default=0, help="stop Phase 3 after this many successfully embedded papers (0=unlimited)")
+    parser.add_argument("--max-embed-chunks", type=int, default=0, help="stop Phase 3 before exceeding this many chunk writes (0=unlimited)")
     args = parser.parse_args()
 
     run(
@@ -817,4 +867,6 @@ if __name__ == "__main__":
         require_q1=not args.no_require_q1,
         keep_unknown_journal=args.keep_unknown_journal,
         dry_run=args.dry_run,
+        max_embed_papers=args.max_embed_papers,
+        max_embed_chunks=args.max_embed_chunks,
     )
