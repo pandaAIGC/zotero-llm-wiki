@@ -282,6 +282,7 @@ def _decide_status(
     failed = int(stats.get("failed") or 0)
     stats_parse_failed_empty = int(stats.get("parse_failed_empty") or 0)
     stats_parse_failures_skipped = int(stats.get("parse_failures_skipped") or 0)
+    stats_suspect_pdf_duplicates = int(stats.get("suspect_pdf_duplicates") or 0)
     log_parse_failed_empty = sorted(set(log.get("parse_failed_empty") or []))
     log_no_chunks = sorted(set(log.get("no_chunks") or []))
 
@@ -299,6 +300,10 @@ def _decide_status(
         reasons.append(f"last ingest MinerU failed/empty count is {stats_parse_failed_empty}")
     if stats_parse_failures_skipped > 0:
         reasons.append(f"last ingest skipped {stats_parse_failures_skipped} previous parse failure(s)")
+    if stats_suspect_pdf_duplicates > 0:
+        reasons.append(
+            f"last ingest skipped {stats_suspect_pdf_duplicates} suspicious duplicate PDF item(s)"
+        )
     if log_parse_failed_empty:
         sample = ", ".join(log_parse_failed_empty[:12])
         reasons.append(f"log shows MinerU failed/empty for {len(log_parse_failed_empty)} key(s): {sample}")
@@ -347,6 +352,7 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
     log = _merge_companion_output_log(_scan_log(log_path, tail_limit), log_path, tail_limit)
     review = _latest_review(output_dir)
     duplicate_hashes = _parsed_duplicate_hashes()
+    suspect_pdf_report = config.DATA_DIR / "suspect_pdf_duplicates.json"
     ingest_running = _is_ingest_running()
     status, reasons = _decide_status(
         stats, log, chroma_total, len(parsed), duplicate_hashes, ingest_running
@@ -361,6 +367,7 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
         "stats": stats,
         "parsed_count": len(parsed),
         "parsed_duplicate_hashes": duplicate_hashes,
+        "suspect_pdf_duplicate_report": str(suspect_pdf_report) if suspect_pdf_report.exists() else None,
         "chroma_total_chunks": chroma_total,
         "collections": collections,
         "latest_review": review,
@@ -386,6 +393,8 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
         f"{(stats or {}).get('failed', 'n/a')} / {(stats or {}).get('api_limited', 'n/a')}",
         f"- Last stats MinerU failed/empty: {(stats or {}).get('parse_failed_empty', 'n/a')}",
         f"- Last stats skipped previous parse failures: {(stats or {}).get('parse_failures_skipped', 'n/a')}",
+        f"- Last stats suspicious duplicate PDFs skipped: {(stats or {}).get('suspect_pdf_duplicates', 'n/a')}",
+        f"- Suspicious duplicate report: `{suspect_pdf_report if suspect_pdf_report.exists() else 'missing'}`",
         f"- Latest review: `{review.get('path') if review else 'missing'}`",
         f"- Log: `{log.get('path')}`",
         "",
