@@ -149,6 +149,35 @@ def _normalize_title(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _normalize_doi(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", text)
+    return text.rstrip(" .")
+
+
+def _title_similarity(a: str, b: str) -> float:
+    a_tokens = set(_normalize_title(a).split())
+    b_tokens = set(_normalize_title(b).split())
+    if not a_tokens or not b_tokens:
+        return 0.0
+    return len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
+
+
+def _same_pdf_is_expected(first_item: dict, item: dict) -> tuple[bool, str]:
+    first_doi = _normalize_doi(first_item.get("doi", "") or first_item.get("DOI", ""))
+    this_doi = _normalize_doi(item.get("doi", "") or item.get("DOI", ""))
+    if first_doi and this_doi and first_doi == this_doi:
+        return True, "same DOI"
+
+    first_title = first_item.get("title", "")
+    this_title = item.get("title", "")
+    if _normalize_title(first_title) == _normalize_title(this_title):
+        return True, "same title"
+    if _title_similarity(first_title, this_title) >= 0.90:
+        return True, "near-identical title"
+    return False, ""
+
+
 def _file_sha256(path: Path, cache: dict[Path, str]) -> str:
     resolved = path.resolve()
     cached = cache.get(resolved)
@@ -651,16 +680,16 @@ def run(
         seen = seen_pdf_hashes.get(pdf_hash)
         if seen:
             first_item, first_pdf_path = seen
-            first_title_norm = _normalize_title(first_item.get("title", ""))
-            this_title_norm = _normalize_title(item.get("title", ""))
-            if first_title_norm == this_title_norm:
+            same_pdf_expected, same_pdf_reason = _same_pdf_is_expected(first_item, item)
+            if same_pdf_expected:
                 exact_pdf_duplicate_skipped += 1
                 logger.warning(
-                    "  [%s/%s] %s: duplicate PDF hash of %s with same title - SKIP duplicate",
+                    "  [%s/%s] %s: duplicate PDF hash of %s with %s - SKIP duplicate",
                     i,
                     len(items),
                     key,
                     first_item["key"],
+                    same_pdf_reason,
                 )
                 continue
 
