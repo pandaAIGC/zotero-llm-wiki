@@ -79,6 +79,8 @@ _default_chroma_dir = DATA_DIR / ("chroma_db" if EMBED_PROVIDER == "zhipu" else 
 CHROMA_DIR = Path(_e("CHROMA_DIR", str(_default_chroma_dir)))
 PARSED_DIR = PROJECT_DIR / "parsed"
 PAPERS_DIR = DATA_DIR / "papers"          # 永久 PDF 存储（linked_file 指向这里）
+PARSE_FAILURES_FILE = DATA_DIR / "parse_failures.json"
+PARSE_FAILURE_MAX_ATTEMPTS = int(_e("PARSE_FAILURE_MAX_ATTEMPTS", "2"))
 ZOTERO_LOCAL_STORAGE = Path(_e("ZOTERO_LOCAL_STORAGE", os.path.expanduser(r"~\Zotero\storage")))
 for _d in [CHROMA_DIR, PARSED_DIR, DATA_DIR, PAPERS_DIR]:
     _d.mkdir(parents=True, exist_ok=True)

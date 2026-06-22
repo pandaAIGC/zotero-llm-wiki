@@ -89,6 +89,52 @@ def _is_api_limit_error(exc: BaseException) -> bool:
     return any(marker in text for marker in markers)
 
 
+def _load_parse_failures() -> dict[str, dict]:
+    path = config.PARSE_FAILURES_FILE
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        logger.warning("Could not read parse failure registry %s: %s", path, exc)
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k): v for k, v in data.items() if isinstance(v, dict)}
+
+
+def _save_parse_failures(parse_failures: dict[str, dict]) -> None:
+    config.PARSE_FAILURES_FILE.write_text(
+        json.dumps(parse_failures, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+def _record_parse_failure(parse_failures: dict[str, dict], key: str, reason: str) -> None:
+    entry = parse_failures.get(key, {})
+    entry["attempts"] = int(entry.get("attempts") or 0) + 1
+    entry["reason"] = reason
+    entry["updated"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+    parse_failures[key] = entry
+
+
+def _clear_parse_failure(parse_failures: dict[str, dict], key: str) -> None:
+    parse_failures.pop(key, None)
+
+
+def _parse_failure_attempts(parse_failures: dict[str, dict], key: str) -> int:
+    return int((parse_failures.get(key) or {}).get("attempts") or 0)
+
+
+def _parse_failure_skip_reason(parse_failures: dict[str, dict], key: str) -> str | None:
+    max_attempts = int(getattr(config, "PARSE_FAILURE_MAX_ATTEMPTS", 0) or 0)
+    attempts = _parse_failure_attempts(parse_failures, key)
+    if max_attempts > 0 and attempts >= max_attempts:
+        reason = (parse_failures.get(key) or {}).get("reason") or "parse_failed"
+        return f"{reason} after {attempts} attempt(s)"
+    return None
+
+
 def _normalize_journal(value: str) -> str:
     text = str(value or "").lower()
     text = text.replace("&", " and ")
@@ -561,6 +607,9 @@ def run(
 
     print()
 
+    parse_failures = _load_parse_failures()
+    parse_failures_skipped = 0
+
     # -- Phase 1: Download PDF + Check cache --
     print("=" * 60)
     print("  Phase 1: 下载 PDF + 检查缓存")
@@ -657,11 +706,25 @@ def run(
                 len(md.strip()),
             )
 
+        skip_reason = None if force_parse else _parse_failure_skip_reason(parse_failures, key)
+        if skip_reason:
+            parse_failures_skipped += 1
+            logger.warning(
+                "  [%s/%s] %s: previous parse failure (%s) - SKIP",
+                i,
+                len(items),
+                key,
+                skip_reason,
+            )
+            continue
+
         need_parse.append((item, pdf_path))
         logger.info(f"  [{i}/{len(items)}] {key}: {title} -> need parse ({pdf_path.stat().st_size / 1024 / 1024:.1f} MB)")
 
     print(f"\n  缓存命中: {len(cached)} 篇")
     print(f"  需要解析: {len(need_parse)} 篇")
+    if parse_failures_skipped:
+        print(f"  解析失败历史跳过: {parse_failures_skipped} 篇")
     if suspect_pdf_duplicate_keys:
         cached = {
             key: value
@@ -700,6 +763,7 @@ def run(
 
     # -- Phase 2: Batch MinerU parsing --
     parsed: dict[str, tuple] = {}  # item_key -> (item, markdown_text)
+    parse_failed_empty: set[str] = set()
 
     parse_api_limited = False
 
@@ -738,6 +802,9 @@ def run(
                         md = results.get(key)
                         if md and md.strip():
                             parsed[key] = (item, md)
+                        else:
+                            parse_failed_empty.add(key)
+                            _record_parse_failure(parse_failures, key, "mineru_failed_or_empty")
                 except Exception as e:
                     if _is_api_limit_error(e):
                         logger.error(f"  MinerU API limit reached; stopping parse phase: {e}")
@@ -759,6 +826,8 @@ def run(
                                 parse_api_limited = True
                                 break
                             logger.error(f"  {key}: single-paper fallback also failed: {e2}")
+                            parse_failed_empty.add(key)
+                            _record_parse_failure(parse_failures, key, "mineru_failed_or_empty")
                     if api_limited:
                         break
 
@@ -769,6 +838,12 @@ def run(
             http_client.close()
 
     print(f"\n  MinerU 解析完成: {len(parsed)} 篇")
+    if parse_failed_empty:
+        logger.warning(
+            "  MinerU failed/empty outputs: %s keys: %s",
+            len(parse_failed_empty),
+            ", ".join(sorted(parse_failed_empty)[:30]),
+        )
 
     # -- Phase 3: Chunking + Embedding + Ingestion --
     print()
@@ -786,6 +861,10 @@ def run(
         "require_q1": require_q1 if high_impact_only else None,
         "cached": len(cached),
         "parsed": len(parsed),
+        "parse_failed_empty": len(parse_failed_empty),
+        "parse_failed_empty_keys": sorted(parse_failed_empty),
+        "parse_failures_skipped": parse_failures_skipped,
+        "parse_failure_max_attempts": config.PARSE_FAILURE_MAX_ATTEMPTS,
         "success": 0,
         "skipped": 0,
         "failed": 0,
@@ -828,10 +907,12 @@ def run(
 
             n = _process_prepared_paper(prepared_key, chunks, target_collections)
             if n > 0:
+                _clear_parse_failure(parse_failures, prepared_key)
                 stats["success"] += 1
                 stats["chunks"] += n
                 embedded_papers += 1
             else:
+                _record_parse_failure(parse_failures, prepared_key, "no_chunks")
                 stats["skipped"] += 1
         except Exception as e:
             if _is_api_limit_error(e):
@@ -851,6 +932,8 @@ def run(
     print(f"  总计:       {stats['total']} 篇")
     print(f"  缓存命中:   {stats['cached']} 篇")
     print(f"  MinerU解析: {stats['parsed']} 篇")
+    print(f"  MinerU空结果: {stats['parse_failed_empty']} 篇")
+    print(f"  解析失败跳过: {stats['parse_failures_skipped']} 篇")
     print(f"  入库成功:   {stats['success']} 篇")
     print(f"  跳过:       {stats['skipped']} 篇")
     print(f"  失败:       {stats['failed']} 篇")
@@ -870,6 +953,7 @@ def run(
 
     # Save statistics
     stats_path = config.DATA_DIR / "last_ingest_stats.json"
+    _save_parse_failures(parse_failures)
     with open(stats_path, "w", encoding="utf-8") as f:
         json.dump(stats, f, ensure_ascii=False, indent=2)
     print(f"\nStats saved: {stats_path}")

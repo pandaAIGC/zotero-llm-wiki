@@ -116,6 +116,9 @@ MINERU_TOKEN=你的MinerU Token
 MINERU_MODEL=vlm
 MIN_PARSED_CACHE_CHARS=500
 
+# 成本保护：同一 PDF 多次解析为空或无有效 chunk 后，后续增量入库会跳过
+PARSE_FAILURE_MAX_ATTEMPTS=2
+
 # 文本向量化（二选一）
 # 默认: zhipu，使用智谱 embedding-3，写入 data/chroma_db
 EMBED_PROVIDER=zhipu
@@ -182,6 +185,8 @@ set OLLAMA_EMBED_MODEL=qwen3-embedding:latest
 ```
 
 默认会写到 `data/chroma_db_ollama_qwen3-embedding_latest` 这类独立目录。不同 embedding 模型的向量维度不同，不能混在同一个 ChromaDB 里。
+
+对反复解析为空、或解析后没有有效 chunk 的 PDF，脚本会写入 `data/parse_failures.json`。同一条目达到 `PARSE_FAILURE_MAX_ATTEMPTS` 后，后续增量入库会直接跳过，避免把 MinerU 和 embedding 额度浪费在已确认不可自动修复的残余项上。把该值设为 `0` 可以关闭这个保护。
 
 ### 步骤 6：生成 Obsidian LLM Wiki
 
@@ -306,7 +311,8 @@ zotero-llm-wiki/
 │   ├── chroma_db/         # ChromaDB 向量数据库
 │   ├── papers/            # PDF 永久存储（linked_file 指向这里）
 │   ├── downloads/         # PDF 临时下载目录
-│   └── collection_map.json
+│   ├── collection_map.json
+│   └── parse_failures.json # 解析失败登记，用于避免重复消耗 API 额度
 │
 ├── parsed/                # MinerU 解析缓存（每篇论文一个子目录）
 │   └── {key}/
@@ -382,6 +388,8 @@ ingest_paper()
 
 **Q：MinerU 解析失败怎么办？**
 MinerU 是**国内服务**（mineru.net），必须直连、不能走代理。`network_helper.py` 会在 TUN 模式下自动将 MinerU 流量绕过代理走直连。如果仍然失败，检查你的 TUN 代理规则是否误拦截了 mineru.net。也可以手动在 `parsed/{key}/` 下放置同名 `.md` 文件跳过解析。
+
+如果某个 PDF 多次返回空结果或没有有效 chunk，它会进入 `data/parse_failures.json`。达到 `PARSE_FAILURE_MAX_ATTEMPTS` 后，增量入库会跳过它，避免反复调用 MinerU/embedding。确认问题已修复后，可以删除该文件中的对应 Zotero key，或临时设置 `PARSE_FAILURE_MAX_ATTEMPTS=0` 强制重试。
 
 **Q：我想只搜索不入库，可以吗？**
 可以。`discover_papers` 只搜索不入库。`download_paper` 只下载不入库。每一步都是独立的。

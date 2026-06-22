@@ -38,6 +38,8 @@ PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]\s+([A-Z0-9]+):\s+(.*)")
 FALLBACK_FAILURE_RE = re.compile(
     r"\[ERROR\]\s+([A-Z0-9]+): single-paper fallback also failed:\s+(.*)"
 )
+PARSE_FAILED_EMPTY_RE = re.compile(r"\[([A-Z0-9]+)\]\s+failed or empty")
+NO_CHUNKS_RE = re.compile(r"\s([A-Z0-9]+): no chunks")
 SENSITIVE_URL_PATTERNS = [
     re.compile(r"https://zoterofilestorage[^ ]+"),
     re.compile(r"https://mineru\.oss-cn-shanghai\.aliyuncs\.com/[^ ]+"),
@@ -136,6 +138,8 @@ def _scan_log(log_path: Path | None, tail_limit: int) -> dict[str, Any]:
     signals = {name: 0 for name in SIGNAL_PATTERNS}
     last_progress = None
     fallback_failures: list[dict[str, str]] = []
+    parse_failed_empty: list[str] = []
+    no_chunks: list[str] = []
     line_count = 0
     tail: list[str] = []
 
@@ -162,6 +166,12 @@ def _scan_log(log_path: Path | None, tail_limit: int) -> dict[str, Any]:
                     "key": key,
                     "message": _sanitize_log_line(message)[:500],
                 })
+            parse_failed_match = PARSE_FAILED_EMPTY_RE.search(line)
+            if parse_failed_match:
+                parse_failed_empty.append(parse_failed_match.group(1))
+            no_chunks_match = NO_CHUNKS_RE.search(line)
+            if no_chunks_match:
+                no_chunks.append(no_chunks_match.group(1))
             tail.append(_sanitize_log_line(line))
             if len(tail) > tail_limit:
                 tail.pop(0)
@@ -175,6 +185,8 @@ def _scan_log(log_path: Path | None, tail_limit: int) -> dict[str, Any]:
         "signals": signals,
         "last_progress": last_progress,
         "fallback_failures": fallback_failures,
+        "parse_failed_empty": parse_failed_empty,
+        "no_chunks": no_chunks,
         "tail": tail,
     }
 
@@ -192,6 +204,10 @@ def _merge_companion_output_log(log: dict[str, Any], log_path: Path | None, tail
     signals = log.setdefault("signals", {})
     for name, count in (companion.get("signals") or {}).items():
         signals[name] = int(signals.get(name) or 0) + int(count or 0)
+    for key in ("fallback_failures", "parse_failed_empty", "no_chunks"):
+        merged = list(log.get(key) or [])
+        merged.extend(companion.get(key) or [])
+        log[key] = merged
     return log
 
 
@@ -264,6 +280,10 @@ def _decide_status(
     success = int(stats.get("success") or 0)
     chunks = int(stats.get("chunks") or 0)
     failed = int(stats.get("failed") or 0)
+    stats_parse_failed_empty = int(stats.get("parse_failed_empty") or 0)
+    stats_parse_failures_skipped = int(stats.get("parse_failures_skipped") or 0)
+    log_parse_failed_empty = sorted(set(log.get("parse_failed_empty") or []))
+    log_no_chunks = sorted(set(log.get("no_chunks") or []))
 
     if success <= 0:
         reasons.append("last ingest success count is zero")
@@ -275,6 +295,16 @@ def _decide_status(
         reasons.append("parsed cache has zero parsed papers")
     if failed > 0:
         reasons.append(f"last ingest failed count is {failed}")
+    if stats_parse_failed_empty > 0:
+        reasons.append(f"last ingest MinerU failed/empty count is {stats_parse_failed_empty}")
+    if stats_parse_failures_skipped > 0:
+        reasons.append(f"last ingest skipped {stats_parse_failures_skipped} previous parse failure(s)")
+    if log_parse_failed_empty:
+        sample = ", ".join(log_parse_failed_empty[:12])
+        reasons.append(f"log shows MinerU failed/empty for {len(log_parse_failed_empty)} key(s): {sample}")
+    if log_no_chunks:
+        sample = ", ".join(log_no_chunks[:12])
+        reasons.append(f"log shows no chunks for {len(log_no_chunks)} key(s): {sample}")
     if duplicate_hashes:
         top = duplicate_hashes[0]
         reasons.append(
@@ -282,15 +312,22 @@ def _decide_status(
             f"largest group has {top['count']} keys"
         )
 
-    duplicate_only = (
-        duplicate_hashes
-        and len(reasons) == 1
-        and reasons[0].startswith("parsed cache has ")
+    warning_prefixes = (
+        "last ingest success count is zero",
+        "last ingest chunk count is zero",
+        "parsed cache has ",
+        "last ingest MinerU failed/empty count is ",
+        "last ingest skipped ",
+        "log shows MinerU failed/empty for ",
+        "log shows no chunks for ",
+    )
+    warning_only = bool(reasons) and all(
+        reason.startswith(warning_prefixes) for reason in reasons
     )
 
     if hard_errors or stats.get("api_limited"):
         return "warn", reasons
-    if duplicate_only:
+    if warning_only:
         return "warn", reasons
     if reasons:
         return "fail", reasons
@@ -347,6 +384,8 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
         f"- Last stats success/chunks/failed/api_limited: "
         f"{(stats or {}).get('success', 'n/a')} / {(stats or {}).get('chunks', 'n/a')} / "
         f"{(stats or {}).get('failed', 'n/a')} / {(stats or {}).get('api_limited', 'n/a')}",
+        f"- Last stats MinerU failed/empty: {(stats or {}).get('parse_failed_empty', 'n/a')}",
+        f"- Last stats skipped previous parse failures: {(stats or {}).get('parse_failures_skipped', 'n/a')}",
         f"- Latest review: `{review.get('path') if review else 'missing'}`",
         f"- Log: `{log.get('path')}`",
         "",
@@ -377,6 +416,20 @@ def run(output_dir: Path, log_path: Path | None, tail_limit: int) -> tuple[Path,
             lines.append(f"- {failure.get('key')}: {failure.get('message')}")
         if len(fallback_failures) > 80:
             lines.append(f"- ... {len(fallback_failures) - 80} more")
+    else:
+        lines.append("- None.")
+    lines += ["", "## MinerU Failed Or Empty", ""]
+    parse_failed_empty = log.get("parse_failed_empty") or []
+    if parse_failed_empty:
+        for key in sorted(set(parse_failed_empty))[:120]:
+            lines.append(f"- {key}")
+    else:
+        lines.append("- None.")
+    lines += ["", "## No Chunk Papers", ""]
+    no_chunks = log.get("no_chunks") or []
+    if no_chunks:
+        for key in sorted(set(no_chunks))[:120]:
+            lines.append(f"- {key}")
     else:
         lines.append("- None.")
     lines += ["", "## Log Tail", ""]
