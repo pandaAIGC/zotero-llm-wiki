@@ -26,6 +26,9 @@ _load_dotenv()
 def _e(key: str, default: str = "") -> str:
     return os.environ.get(key, default)
 
+def _bool_e(key: str, default: str = "0") -> bool:
+    return _e(key, default).strip().lower() in {"1", "true", "yes", "on"}
+
 # -- API Keys --
 ZOTERO_USER_ID = _e("ZOTERO_USER_ID")
 ZOTERO_API_KEY = _e("ZOTERO_API_KEY")
@@ -35,6 +38,9 @@ MINERU_TOKEN = _e("MINERU_TOKEN")
 MINERU_MODEL = "vlm"
 MINERU_HTTP_TIMEOUT = float(_e("MINERU_HTTP_TIMEOUT", "600.0"))
 MIN_PARSED_CACHE_CHARS = int(_e("MIN_PARSED_CACHE_CHARS", "500"))
+LOCAL_PARSE_FALLBACK = _bool_e("LOCAL_PARSE_FALLBACK", "1")
+LOCAL_PARSE_FALLBACK_MAX_PAGES = int(_e("LOCAL_PARSE_FALLBACK_MAX_PAGES", "450"))
+LOCAL_PARSE_FALLBACK_MIN_CHARS = int(_e("LOCAL_PARSE_FALLBACK_MIN_CHARS", "2000"))
 ZHIPU_API_KEY = _e("ZHIPU_API_KEY")
 UNPAYWALL_EMAIL = _e("UNPAYWALL_EMAIL", "")
 OPENALEX_EMAIL = _e("OPENALEX_EMAIL", UNPAYWALL_EMAIL)  # polite pool, faster responses
@@ -80,6 +86,7 @@ CHROMA_DIR = Path(_e("CHROMA_DIR", str(_default_chroma_dir)))
 PARSED_DIR = PROJECT_DIR / "parsed"
 PAPERS_DIR = DATA_DIR / "papers"          # 永久 PDF 存储（linked_file 指向这里）
 PARSE_FAILURES_FILE = DATA_DIR / "parse_failures.json"
+SUSPECT_PDF_SKIP_KEYS_FILE = DATA_DIR / "suspect_pdf_skip_keys.json"
 PARSE_FAILURE_MAX_ATTEMPTS = int(_e("PARSE_FAILURE_MAX_ATTEMPTS", "2"))
 ZOTERO_LOCAL_STORAGE = Path(_e("ZOTERO_LOCAL_STORAGE", os.path.expanduser(r"~\Zotero\storage")))
 for _d in [CHROMA_DIR, PARSED_DIR, DATA_DIR, PAPERS_DIR]:

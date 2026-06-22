@@ -135,6 +135,29 @@ def _parse_failure_skip_reason(parse_failures: dict[str, dict], key: str) -> str
     return None
 
 
+def _load_suspect_pdf_skip_keys() -> set[str]:
+    path = config.SUSPECT_PDF_SKIP_KEYS_FILE
+    if not path.exists():
+        return set()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    if isinstance(data, list):
+        return {str(k) for k in data if k}
+    if isinstance(data, dict):
+        keys = data.get("keys", [])
+        return {str(k) for k in keys if k}
+    return set()
+
+
+def _save_suspect_pdf_skip_keys(keys: set[str]) -> None:
+    config.SUSPECT_PDF_SKIP_KEYS_FILE.write_text(
+        json.dumps(sorted(keys), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
 def _normalize_journal(value: str) -> str:
     text = str(value or "").lower()
     text = text.replace("&", " and ")
@@ -168,6 +191,65 @@ _PDF_TITLE_STOPWORDS = {
     "analysis", "study", "novel", "role", "between", "through", "reveals",
     "of", "in", "on", "to", "a", "an", "as", "by", "or", "is", "are",
 }
+
+
+def _zotero_item_summary(data: dict, col_map: dict[str, str]) -> dict:
+    """Convert Zotero item data to the compact shape used by the ingest pipeline."""
+    authors = []
+    for creator in data.get("creators", []):
+        if creator.get("creatorType") == "author":
+            last = creator.get("lastName", "")
+            first = creator.get("firstName", "")
+            name = f"{last} {first}".strip()
+            if name:
+                authors.append(name)
+
+    date_str = data.get("date", "")
+    year = None
+    if date_str:
+        try:
+            year = int(date_str[:4])
+        except (ValueError, IndexError):
+            pass
+
+    collection_names = []
+    for col_key in data.get("collections", []):
+        col_name = col_map.get(col_key, "")
+        if col_name:
+            collection_names.append(col_name)
+    if not collection_names:
+        collection_names = [config.DEFAULT_COLLECTION]
+
+    return {
+        "key": data["key"],
+        "title": data.get("title", ""),
+        "authors": authors,
+        "year": year,
+        "doi": data.get("DOI", ""),
+        "item_type": data["itemType"],
+        "journal": data.get("publicationTitle", ""),
+        "journal_abbreviation": data.get("journalAbbreviation", ""),
+        "issn": data.get("ISSN", ""),
+        "url": data.get("url", ""),
+        "abstract": data.get("abstractNote", ""),
+        "collection_names": collection_names,
+        "has_pdf": False,
+    }
+
+
+def _fetch_items_by_keys(zot, item_keys: set[str]) -> list[dict]:
+    col_map = {col["key"]: col["name"] for col in zotero_sync.list_collections(zot)}
+    items = []
+    for key in sorted(item_keys):
+        try:
+            data = zot.item(key)["data"]
+        except Exception as exc:
+            logger.error("  %s: failed to fetch Zotero item metadata: %s", key, exc)
+            continue
+        if data.get("itemType") in {"attachment", "note", "annotation"}:
+            continue
+        items.append(_zotero_item_summary(data, col_map))
+    return items
 
 
 def _title_tokens(value: str) -> list[str]:
@@ -248,6 +330,66 @@ def _pdf_matches_item(pdf_path: Path, item: dict, cache: dict[tuple[str, str], d
 
     cache[cache_key] = result
     return result
+
+
+def _local_parse_pdf_text(pdf_path: Path, item: dict) -> tuple[str | None, str]:
+    """Extract readable PDF text locally as a conservative MinerU fallback."""
+    if not config.LOCAL_PARSE_FALLBACK:
+        return None, "disabled"
+    if not pdf_path.exists():
+        return None, "pdf_missing"
+
+    try:
+        import fitz  # PyMuPDF
+
+        doc = fitz.open(str(pdf_path))
+        page_count = doc.page_count
+        if page_count > config.LOCAL_PARSE_FALLBACK_MAX_PAGES:
+            doc.close()
+            return None, f"too_many_pages:{page_count}"
+
+        pages: list[str] = []
+        for page_index in range(page_count):
+            text = doc.load_page(page_index).get_text("text") or ""
+            if text.strip():
+                pages.append(f"## Page {page_index + 1}\n\n{text.strip()}")
+        doc.close()
+    except Exception as exc:
+        return None, f"local_read_failed:{type(exc).__name__}"
+
+    body = "\n\n".join(pages).strip()
+    if len(body) < config.LOCAL_PARSE_FALLBACK_MIN_CHARS:
+        return None, f"too_little_text:{len(body)}"
+
+    if item.get("item_type") == "webpage":
+        match = _pdf_matches_item(pdf_path, item, {})
+        if not match.get("ok"):
+            return None, f"webpage_title_mismatch:{match.get('reason')}"
+
+    title = item.get("title") or pdf_path.stem
+    markdown = (
+        f"# {title}\n\n"
+        "> Parsed locally from PDF text after MinerU returned an empty or failed result. "
+        "Tables, formulas, and figures may be less structured than MinerU output.\n\n"
+        f"{body}\n"
+    )
+    return markdown, "local_text"
+
+
+def _try_local_parse_fallback(item: dict, pdf_path: Path, parsed: dict[str, tuple]) -> bool:
+    key = item["key"]
+    md, reason = _local_parse_pdf_text(pdf_path, item)
+    if not md:
+        logger.warning("  %s: local parse fallback unavailable (%s)", key, reason)
+        return False
+
+    cache_dir = config.PARSED_DIR / key
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_md = cache_dir / f"{key}.md"
+    cache_md.write_text(md, encoding="utf-8")
+    parsed[key] = (item, md)
+    logger.info("  %s: local parse fallback succeeded (%s chars)", key, len(md))
+    return True
 
 
 def _same_pdf_is_expected(first_item: dict, item: dict) -> tuple[bool, str]:
@@ -642,6 +784,8 @@ def run(
     max_parse_papers: int = 0,
     max_embed_papers: int = 0,
     max_embed_chunks: int = 0,
+    item_keys: set[str] | None = None,
+    local_parse_only: bool = False,
 ):
     """运行完整入库管线"""
     print("=" * 60)
@@ -652,6 +796,10 @@ def run(
     print(f"  Parsed:          {config.PARSED_DIR}")
     print(f"  Embedding:       {config.EMBED_PROVIDER}:{config.EMBED_MODEL}")
     print(f"  MinerU batch:    {mineru_batch_size}")
+    if item_keys:
+        print(f"  Item keys:       {', '.join(sorted(item_keys))}")
+    if local_parse_only:
+        print("  Parse mode:      local PDF text only (MinerU disabled)")
     if max_parse_papers > 0:
         print(f"  Parse budget:    max {max_parse_papers} papers")
     if max_embed_papers > 0:
@@ -664,7 +812,10 @@ def run(
 
     # -- Phase 0: Fetch paper list --
     zot = zotero_sync._get_client()
-    items = zotero_sync.list_items(zot, check_pdf=False)
+    if item_keys:
+        items = _fetch_items_by_keys(zot, item_keys)
+    else:
+        items = zotero_sync.list_items(zot, check_pdf=False)
     print(f"  Zotero 论文总数: {len(items)}")
 
     if collection_filter:
@@ -737,12 +888,27 @@ def run(
     pdf_match_cache: dict[tuple[str, str], dict] = {}
     seen_pdf_hashes: dict[str, tuple[dict, Path]] = {}
     suspect_pdf_duplicate_keys: set[str] = set()
+    persistent_suspect_pdf_skip_keys = _load_suspect_pdf_skip_keys()
     suspect_pdf_duplicate_records: list[dict] = []
     exact_pdf_duplicate_skipped = 0
 
     for i, item in enumerate(items, 1):
         key = item["key"]
         title = item.get("title", "?")[:50]
+        if key in persistent_suspect_pdf_skip_keys:
+            suspect_pdf_duplicate_keys.add(key)
+            suspect_pdf_duplicate_records.append({
+                "key": key,
+                "title": item.get("title", ""),
+                "action": "skip_persistent_suspect",
+            })
+            logger.error(
+                "  [%s/%s] %s: persistent suspicious PDF skip - SKIP",
+                i,
+                len(items),
+                key,
+            )
+            continue
 
         # Download PDF (prefer local copy)
         try:
@@ -885,6 +1051,7 @@ def run(
         report_path = config.DATA_DIR / "suspect_pdf_duplicates.json"
         with report_path.open("w", encoding="utf-8") as f:
             json.dump(suspect_pdf_duplicate_records, f, ensure_ascii=False, indent=2)
+        _save_suspect_pdf_skip_keys(persistent_suspect_pdf_skip_keys | suspect_pdf_duplicate_keys)
         logger.error(
             "  Suspicious duplicate PDFs skipped: %s keys; report: %s",
             len(suspect_pdf_duplicate_keys),
@@ -916,8 +1083,16 @@ def run(
     if need_parse:
         print()
         print("=" * 60)
-        print("  Phase 2: MinerU 批量解析")
+        print("  Phase 2: " + ("本地 PDF 文本解析" if local_parse_only else "MinerU 批量解析"))
         print("=" * 60)
+
+        if local_parse_only:
+            for item, pdf_path in need_parse:
+                key = item["key"]
+                if not _try_local_parse_fallback(item, pdf_path, parsed):
+                    parse_failed_empty.add(key)
+                    _record_parse_failure(parse_failures, key, "local_fallback_failed")
+            need_parse = []
 
         http_client = httpx.Client(
             headers={"Authorization": f"Bearer {config.MINERU_TOKEN}"},
@@ -949,8 +1124,9 @@ def run(
                         if md and md.strip():
                             parsed[key] = (item, md)
                         else:
-                            parse_failed_empty.add(key)
-                            _record_parse_failure(parse_failures, key, "mineru_failed_or_empty")
+                            if not _try_local_parse_fallback(item, pdf_path, parsed):
+                                parse_failed_empty.add(key)
+                                _record_parse_failure(parse_failures, key, "mineru_failed_or_empty")
                 except Exception as e:
                     if _is_api_limit_error(e):
                         logger.error(f"  MinerU API limit reached; stopping parse phase: {e}")
@@ -972,8 +1148,9 @@ def run(
                                 parse_api_limited = True
                                 break
                             logger.error(f"  {key}: single-paper fallback also failed: {e2}")
-                            parse_failed_empty.add(key)
-                            _record_parse_failure(parse_failures, key, "mineru_failed_or_empty")
+                            if not _try_local_parse_fallback(item, pdf_path, parsed):
+                                parse_failed_empty.add(key)
+                                _record_parse_failure(parse_failures, key, "mineru_failed_or_empty")
                     if api_limited:
                         break
 
@@ -1016,6 +1193,7 @@ def run(
         "failed": 0,
         "chunks": 0,
         "api_limited": parse_api_limited,
+        "parse_mode": "local" if local_parse_only else "mineru",
         "embed_provider": config.EMBED_PROVIDER,
         "embed_model": config.EMBED_MODEL,
         "parse_budget_stopped": parse_budget_stopped,
@@ -1077,8 +1255,9 @@ def run(
     print("  入库统计")
     print(f"  总计:       {stats['total']} 篇")
     print(f"  缓存命中:   {stats['cached']} 篇")
-    print(f"  MinerU解析: {stats['parsed']} 篇")
-    print(f"  MinerU空结果: {stats['parse_failed_empty']} 篇")
+    print(f"  解析模式:    {stats['parse_mode']}")
+    print(f"  解析成功:    {stats['parsed']} 篇")
+    print(f"  解析空结果:  {stats['parse_failed_empty']} 篇")
     print(f"  解析失败跳过: {stats['parse_failures_skipped']} 篇")
     print(f"  入库成功:   {stats['success']} 篇")
     print(f"  跳过:       {stats['skipped']} 篇")
@@ -1123,6 +1302,8 @@ if __name__ == "__main__":
     parser.add_argument("--max-parse-papers", type=int, default=0, help="stop Phase 2 after this many papers that need MinerU parsing (0=unlimited)")
     parser.add_argument("--max-embed-papers", type=int, default=0, help="stop Phase 3 after this many successfully embedded papers (0=unlimited)")
     parser.add_argument("--max-embed-chunks", type=int, default=0, help="stop Phase 3 before exceeding this many chunk writes (0=unlimited)")
+    parser.add_argument("--item-key", action="append", default=[], help="process only this Zotero item key; repeatable")
+    parser.add_argument("--local-parse-only", action="store_true", help="use local PDF text extraction for parsing and do not call MinerU")
     args = parser.parse_args()
 
     run(
@@ -1140,4 +1321,6 @@ if __name__ == "__main__":
         max_parse_papers=args.max_parse_papers,
         max_embed_papers=args.max_embed_papers,
         max_embed_chunks=args.max_embed_chunks,
+        item_keys=set(args.item_key) if args.item_key else None,
+        local_parse_only=args.local_parse_only,
     )
