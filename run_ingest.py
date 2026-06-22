@@ -163,6 +163,93 @@ def _title_similarity(a: str, b: str) -> float:
     return len(a_tokens & b_tokens) / len(a_tokens | b_tokens)
 
 
+_PDF_TITLE_STOPWORDS = {
+    "the", "and", "for", "with", "from", "into", "via", "using", "based",
+    "analysis", "study", "novel", "role", "between", "through", "reveals",
+    "of", "in", "on", "to", "a", "an", "as", "by", "or", "is", "are",
+}
+
+
+def _title_tokens(value: str) -> list[str]:
+    tokens = re.findall(r"[a-zA-Z0-9]{4,}", str(value or "").lower())
+    out: list[str] = []
+    for token in tokens:
+        if token in _PDF_TITLE_STOPWORDS:
+            continue
+        if token not in out:
+            out.append(token)
+    return out[:18]
+
+
+def _pdf_matches_item(pdf_path: Path, item: dict, cache: dict[tuple[str, str], dict]) -> dict:
+    """Conservatively validate whether a PDF appears to match a Zotero parent item.
+
+    This is only used to break suspicious same-hash ties. If validation cannot
+    confidently prove a match, the caller should keep treating the attachment as
+    suspicious instead of ingesting potentially wrong full text.
+    """
+    title = str(item.get("title") or "")
+    doi = _normalize_doi(item.get("doi", "") or item.get("DOI", ""))
+    cache_key = (str(pdf_path.resolve()), _normalize_title(title))
+    if cache_key in cache:
+        return cache[cache_key]
+
+    result = {
+        "ok": False,
+        "reason": "not_checked",
+        "title_score": 0.0,
+        "title_token_hits": 0,
+        "title_token_total": 0,
+    }
+    tokens = _title_tokens(title)
+    result["title_token_total"] = len(tokens)
+    if not pdf_path.exists():
+        result["reason"] = "pdf_missing"
+        cache[cache_key] = result
+        return result
+    if len(tokens) < 4:
+        result["reason"] = "not_enough_title_tokens"
+        cache[cache_key] = result
+        return result
+
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(pdf_path))
+        pieces: list[str] = []
+        for page in reader.pages[:4]:
+            try:
+                pieces.append(page.extract_text() or "")
+            except Exception:
+                continue
+    except Exception as exc:
+        result["reason"] = f"pdf_read_failed:{type(exc).__name__}"
+        cache[cache_key] = result
+        return result
+
+    text = "\n".join(pieces).lower()
+    if len(text.strip()) < 200:
+        result["reason"] = "pdf_text_unavailable"
+        cache[cache_key] = result
+        return result
+
+    hits = sum(1 for token in tokens if token in text)
+    score = hits / max(1, len(tokens))
+    result["title_token_hits"] = hits
+    result["title_score"] = round(score, 3)
+
+    filename_has_doi = bool(doi and _normalize_doi(pdf_path.name).find(doi.replace("/", "_")) >= 0)
+    text_has_doi = bool(doi and doi in text)
+    if score >= 0.35 or filename_has_doi or text_has_doi:
+        result["ok"] = True
+        result["reason"] = "accepted_by_title_or_doi"
+    else:
+        result["reason"] = "title_mismatch_rejected"
+
+    cache[cache_key] = result
+    return result
+
+
 def _same_pdf_is_expected(first_item: dict, item: dict) -> tuple[bool, str]:
     first_doi = _normalize_doi(first_item.get("doi", "") or first_item.get("DOI", ""))
     this_doi = _normalize_doi(item.get("doi", "") or item.get("DOI", ""))
@@ -647,6 +734,7 @@ def run(
     cached: dict[str, tuple] = {}       # item_key -> (item, markdown_text)
     need_parse: list[tuple] = []        # [(item, pdf_path), ...]
     pdf_hash_cache: dict[Path, str] = {}
+    pdf_match_cache: dict[tuple[str, str], dict] = {}
     seen_pdf_hashes: dict[str, tuple[dict, Path]] = {}
     suspect_pdf_duplicate_keys: set[str] = set()
     suspect_pdf_duplicate_records: list[dict] = []
@@ -693,25 +781,54 @@ def run(
                 )
                 continue
 
-            suspect_pdf_duplicate_keys.add(first_item["key"])
-            suspect_pdf_duplicate_keys.add(key)
+            first_match = _pdf_matches_item(first_pdf_path, first_item, pdf_match_cache)
+            this_match = _pdf_matches_item(pdf_path, item, pdf_match_cache)
+            if first_match.get("ok") and not this_match.get("ok"):
+                suspect_pdf_duplicate_keys.add(key)
+                suspect_action = "skip_duplicate_only"
+                logger.error(
+                    "  [%s/%s] %s: suspicious duplicate PDF hash shared with %s; duplicate title mismatch - SKIP duplicate",
+                    i,
+                    len(items),
+                    key,
+                    first_item["key"],
+                )
+            elif this_match.get("ok") and not first_match.get("ok"):
+                suspect_pdf_duplicate_keys.add(first_item["key"])
+                seen_pdf_hashes[pdf_hash] = (item, pdf_path)
+                suspect_action = "skip_first_keep_duplicate"
+                logger.error(
+                    "  [%s/%s] %s: suspicious duplicate PDF hash shared with %s; first title mismatch - KEEP current",
+                    i,
+                    len(items),
+                    key,
+                    first_item["key"],
+                )
+            else:
+                suspect_pdf_duplicate_keys.add(first_item["key"])
+                suspect_pdf_duplicate_keys.add(key)
+                suspect_action = "skip_both"
+                logger.error(
+                    "  [%s/%s] %s: suspicious duplicate PDF hash shared with %s but titles differ - SKIP both",
+                    i,
+                    len(items),
+                    key,
+                    first_item["key"],
+                )
             suspect_pdf_duplicate_records.append({
                 "pdf_hash": pdf_hash,
                 "first_key": first_item["key"],
                 "first_title": first_item.get("title", ""),
                 "first_pdf_path": str(first_pdf_path),
+                "first_pdf_match": first_match,
                 "duplicate_key": key,
                 "duplicate_title": item.get("title", ""),
                 "duplicate_pdf_path": str(pdf_path),
+                "duplicate_pdf_match": this_match,
+                "action": suspect_action,
             })
-            logger.error(
-                "  [%s/%s] %s: suspicious duplicate PDF hash shared with %s but titles differ - SKIP both",
-                i,
-                len(items),
-                key,
-                first_item["key"],
-            )
-            continue
+            if key in suspect_pdf_duplicate_keys:
+                continue
 
         seen_pdf_hashes[pdf_hash] = (item, pdf_path)
 
