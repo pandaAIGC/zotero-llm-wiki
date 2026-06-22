@@ -114,6 +114,7 @@ ZOTERO_LIBRARY_TYPE=user
 # MinerU（必填 - PDF 解析）
 MINERU_TOKEN=你的MinerU Token
 MINERU_MODEL=vlm
+MIN_PARSED_CACHE_CHARS=500
 
 # 文本向量化（二选一）
 # 默认: zhipu，使用智谱 embedding-3，写入 data/chroma_db
@@ -164,9 +165,10 @@ CORE_API_KEY=你的CORE API密钥
 
 这会把所有有 PDF 的论文解析并入库。之后新增的论文只需逐个 `ingest_paper` 即可。
 
-如果想控制 embedding 花费，可以给 Phase 3 加预算上限。达到上限后脚本会在下一篇 embedding API 调用前停止，并正常保存 stats：
+如果想控制 MinerU 解析量或 embedding 花费，可以加预算上限。达到上限后脚本会停在下一篇解析/embedding API 调用前，并正常保存 stats：
 
 ```bash
+.venv\Scripts\python.exe run_ingest.py --incremental --max-parse-papers 20
 .venv\Scripts\python.exe run_ingest.py --incremental --max-embed-papers 20
 .venv\Scripts\python.exe run_ingest.py --incremental --max-embed-chunks 2000
 ```

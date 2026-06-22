@@ -255,8 +255,22 @@ def _is_fully_ingested(item: dict, ingested_by_key: dict[str, set[str]]) -> bool
     present = ingested_by_key.get(key, set())
     if not present:
         return False
-    target_collections = item.get("collection_names") or [config.DEFAULT_COLLECTION]
+    target_collections = _target_collections(item)
     return all(col_name in present for col_name in target_collections)
+
+
+def _target_collections(item: dict) -> list[str]:
+    """Return target collection names with stable order and no duplicates."""
+    names = item.get("collection_names") or [config.DEFAULT_COLLECTION]
+    unique: list[str] = []
+    seen: set[str] = set()
+    for name in names:
+        col_name = name or config.DEFAULT_COLLECTION
+        if col_name in seen:
+            continue
+        seen.add(col_name)
+        unique.append(col_name)
+    return unique or [config.DEFAULT_COLLECTION]
 
 
 def _cached_parse_path(item_key: str, pdf_path: Path) -> Path | None:
@@ -357,7 +371,7 @@ def _prepare_paper_chunks(item: dict, markdown_text: str) -> tuple[str, list, li
         "abstract": item.get("abstract", ""),
     }
     chunks = chunker.chunk_markdown(markdown_text, paper_metadata=paper_metadata)
-    target_collections = item.get("collection_names", [config.DEFAULT_COLLECTION])
+    target_collections = _target_collections(item)
     return key, chunks, target_collections
 
 
@@ -463,6 +477,7 @@ def run(
     require_q1: bool = True,
     keep_unknown_journal: bool = False,
     dry_run: bool = False,
+    max_parse_papers: int = 0,
     max_embed_papers: int = 0,
     max_embed_chunks: int = 0,
 ):
@@ -475,6 +490,8 @@ def run(
     print(f"  Parsed:          {config.PARSED_DIR}")
     print(f"  Embedding:       {config.EMBED_PROVIDER}:{config.EMBED_MODEL}")
     print(f"  MinerU batch:    {mineru_batch_size}")
+    if max_parse_papers > 0:
+        print(f"  Parse budget:    max {max_parse_papers} papers")
     if max_embed_papers > 0:
         print(f"  Embed budget:    max {max_embed_papers} papers")
     if max_embed_chunks > 0:
@@ -628,10 +645,17 @@ def run(
                 need_parse.append((item, pdf_path))
                 continue
             md = cache_md.read_text(encoding="utf-8")
-            if md.strip():
+            if len(md.strip()) >= config.MIN_PARSED_CACHE_CHARS:
                 cached[key] = (item, md)
                 logger.info(f"  [{i}/{len(items)}] {key}: cached ({len(md)} chars)")
                 continue
+            logger.warning(
+                "  [%s/%s] %s: cache too short (%s chars) - need parse",
+                i,
+                len(items),
+                key,
+                len(md.strip()),
+            )
 
         need_parse.append((item, pdf_path))
         logger.info(f"  [{i}/{len(items)}] {key}: {title} -> need parse ({pdf_path.stat().st_size / 1024 / 1024:.1f} MB)")
@@ -661,6 +685,18 @@ def run(
         print(f"  可疑重复报告: {report_path}")
     if exact_pdf_duplicate_skipped:
         print(f"  完全重复 PDF 跳过: {exact_pdf_duplicate_skipped} 篇")
+
+    parse_budget_stopped = False
+    if max_parse_papers > 0 and len(need_parse) > max_parse_papers:
+        original_need_parse = len(need_parse)
+        need_parse = need_parse[:max_parse_papers]
+        parse_budget_stopped = True
+        logger.warning(
+            "  Parse budget reached: processing %s of %s papers this run",
+            len(need_parse),
+            original_need_parse,
+        )
+        print(f"  解析预算: 本轮只解析 {len(need_parse)}/{original_need_parse} 篇")
 
     # -- Phase 2: Batch MinerU parsing --
     parsed: dict[str, tuple] = {}  # item_key -> (item, markdown_text)
@@ -757,6 +793,8 @@ def run(
         "api_limited": parse_api_limited,
         "embed_provider": config.EMBED_PROVIDER,
         "embed_model": config.EMBED_MODEL,
+        "parse_budget_stopped": parse_budget_stopped,
+        "max_parse_papers": max_parse_papers or None,
         "embed_budget_stopped": False,
         "max_embed_papers": max_embed_papers or None,
         "max_embed_chunks": max_embed_chunks or None,
@@ -817,6 +855,7 @@ def run(
     print(f"  跳过:       {stats['skipped']} 篇")
     print(f"  失败:       {stats['failed']} 篇")
     print(f"  API限制停止: {'是' if stats['api_limited'] else '否'}")
+    print(f"  解析预算停止: {'是' if stats['parse_budget_stopped'] else '否'}")
     print(f"  预算停止:   {'是' if stats['embed_budget_stopped'] else '否'}")
     print(f"  新增块:     {stats['chunks']} 个")
     print("=" * 60)
@@ -851,6 +890,7 @@ if __name__ == "__main__":
     parser.add_argument("--no-require-q1", action="store_true", help="allow non-Q1 journals if they pass min impact factor")
     parser.add_argument("--keep-unknown-journal", action="store_true", help="keep items whose journal cannot be matched in JCR")
     parser.add_argument("--dry-run", action="store_true", help="show selected candidates without parsing or embedding")
+    parser.add_argument("--max-parse-papers", type=int, default=0, help="stop Phase 2 after this many papers that need MinerU parsing (0=unlimited)")
     parser.add_argument("--max-embed-papers", type=int, default=0, help="stop Phase 3 after this many successfully embedded papers (0=unlimited)")
     parser.add_argument("--max-embed-chunks", type=int, default=0, help="stop Phase 3 before exceeding this many chunk writes (0=unlimited)")
     args = parser.parse_args()
@@ -867,6 +907,7 @@ if __name__ == "__main__":
         require_q1=not args.no_require_q1,
         keep_unknown_journal=args.keep_unknown_journal,
         dry_run=args.dry_run,
+        max_parse_papers=args.max_parse_papers,
         max_embed_papers=args.max_embed_papers,
         max_embed_chunks=args.max_embed_chunks,
     )

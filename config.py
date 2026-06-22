@@ -34,6 +34,7 @@ DEFAULT_COLLECTION = "uncategorized"  # Papers not belonging to any Collection
 MINERU_TOKEN = _e("MINERU_TOKEN")
 MINERU_MODEL = "vlm"
 MINERU_HTTP_TIMEOUT = float(_e("MINERU_HTTP_TIMEOUT", "600.0"))
+MIN_PARSED_CACHE_CHARS = int(_e("MIN_PARSED_CACHE_CHARS", "500"))
 ZHIPU_API_KEY = _e("ZHIPU_API_KEY")
 UNPAYWALL_EMAIL = _e("UNPAYWALL_EMAIL", "")
 OPENALEX_EMAIL = _e("OPENALEX_EMAIL", UNPAYWALL_EMAIL)  # polite pool, faster responses
