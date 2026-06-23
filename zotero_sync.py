@@ -38,6 +38,90 @@ def _safe_filename(value: str) -> str:
     return name or "attachment.pdf"
 
 
+def _normalize_identifier(value: str) -> str:
+    text = str(value or "").strip().lower()
+    text = re.sub(r"^(?:https?://(?:dx\.)?doi\.org/|doi:\s*)", "", text)
+    return text.rstrip(" .")
+
+
+def _title_tokens(value: str) -> list[str]:
+    stopwords = {
+        "the", "and", "for", "with", "from", "into", "via", "using", "based",
+        "analysis", "study", "novel", "role", "between", "through", "reveals",
+        "of", "in", "on", "to", "a", "an", "as", "by", "or", "is", "are",
+    }
+    tokens = re.findall(r"[a-zA-Z0-9]{4,}", str(value or "").lower())
+    out: list[str] = []
+    for token in tokens:
+        if token in stopwords:
+            continue
+        if token not in out:
+            out.append(token)
+    return out[:18]
+
+
+def _pdf_text_preview(path: Path, max_pages: int = 4) -> str:
+    try:
+        import fitz  # PyMuPDF
+    except Exception:
+        return ""
+    pieces: list[str] = []
+    try:
+        with fitz.open(str(path)) as doc:
+            for page_index in range(min(max_pages, doc.page_count)):
+                page = doc.load_page(page_index)
+                pieces.append(page.get_text("text") or "")
+    except Exception:
+        return ""
+    return "\n".join(pieces)
+
+
+def _pdf_match_score(path: Path, title: str, doi: str) -> float:
+    text = _pdf_text_preview(path)
+    haystack = f"{path.name}\n{text[:12000]}".lower()
+    doi = _normalize_identifier(doi)
+    if doi and (doi in haystack or doi.replace("/", "_") in haystack):
+        return 2.0
+    tokens = _title_tokens(title)
+    if not tokens:
+        return 0.0
+    hits = sum(1 for token in tokens if token in haystack)
+    return hits / max(1, len(tokens))
+
+
+def _select_best_pdf_path(
+    paths: list[Path],
+    title: str,
+    doi: str,
+    require_confident: bool = False,
+) -> Path | None:
+    existing = [path for path in paths if path.exists() and path.stat().st_size > 1000]
+    if not existing:
+        return None
+    if len(existing) == 1:
+        if require_confident and (title or doi):
+            score = _pdf_match_score(existing[0], title, doi)
+            if score < 0.35:
+                logger.warning(
+                    "Single PDF candidate did not confidently match item title/DOI: %s (score %.3f)",
+                    existing[0],
+                    score,
+                )
+                return None
+        return existing[0]
+    scored = [(_pdf_match_score(path, title, doi), path) for path in existing]
+    scored.sort(key=lambda item: item[0], reverse=True)
+    best_score, best_path = scored[0]
+    if best_score >= 0.35:
+        logger.info("Selected matching PDF attachment: %s (score %.3f)", best_path, best_score)
+        return best_path
+    if require_confident:
+        logger.warning("No PDF attachment confidently matched item title/DOI")
+        return None
+    logger.warning("No PDF attachment confidently matched item title/DOI; using first available PDF")
+    return existing[0]
+
+
 def _get_client() -> zotero.Zotero:
     """创建 Zotero 客户端"""
     return zotero.Zotero(
@@ -285,9 +369,9 @@ def download_pdf(
 
     查找顺序:
       1. Zotero linked_file 附件路径（data/papers/ 永久存储）
-      2. parsed/{key}/{key}.md 旧缓存（向后兼容，PDF 可能已不存在）
-      3. Zotero 本地 storage（~/Zotero/storage/）
-      4. Zotero API 云端下载（→ 存到 data/papers/）
+      2. Zotero 本地 storage（~/Zotero/storage/）
+      3. Zotero API 云端下载（→ 存到 data/papers/）
+      4. parsed/{key}/{key}.md 旧缓存（向后兼容，PDF 可能已不存在）
 
     Args:
         item_key: 论文的 Zotero key
@@ -298,72 +382,124 @@ def download_pdf(
     if zot is None:
         zot = _get_client()
 
+    item_title = ""
+    item_doi = ""
+    try:
+        item_data = zot.item(item_key).get("data", {})
+        item_title = item_data.get("title", "")
+        item_doi = item_data.get("DOI", "")
+    except Exception as e:
+        logger.debug(f"条目 metadata 查询失败 ({item_key}): {e}")
+
     try:
         pdf_attachments = _get_pdf_attachments(zot, item_key)
     except Exception as e:
         logger.debug(f"附件查询失败: {e}")
         pdf_attachments = []
+    require_confident_match = len(pdf_attachments) > 1
 
     # === 1. Zotero linked_file 附件路径（data/papers/ 永久存储）===
+    linked_candidates: list[Path] = []
     for data in pdf_attachments:
         if data.get("linkMode") == "linked_file":
             linked_path = data.get("path", "")
             if linked_path and Path(linked_path).exists():
-                logger.info(f"PDF found via linked_file: {linked_path}")
-                return Path(linked_path)
+                linked_candidates.append(Path(linked_path))
+    selected = _select_best_pdf_path(
+        linked_candidates,
+        item_title,
+        item_doi,
+        require_confident=require_confident_match,
+    )
+    if selected:
+        logger.info(f"PDF found via linked_file: {selected}")
+        return selected
 
-    # === 2. parsed/{key}/ 旧缓存中的 PDF（向后兼容）===
+    # === 2. Zotero 本地 storage ===
+    storage_candidates: list[Path] = []
+    if pdf_attachments:
+        for data in pdf_attachments:
+            pdf_key = data.get("key")
+            if not pdf_key:
+                continue
+            local_dir = config.ZOTERO_LOCAL_STORAGE / pdf_key
+            if local_dir.is_dir():
+                for f in local_dir.iterdir():
+                    if f.suffix.lower() == ".pdf":
+                        storage_candidates.append(f)
+    selected = _select_best_pdf_path(
+        storage_candidates,
+        item_title,
+        item_doi,
+        require_confident=require_confident_match,
+    )
+    if selected:
+        logger.info(f"PDF found in Zotero storage: {selected}")
+        return selected
+
+    # === 3. Zotero API 云端下载 → 存到 data/papers/（不再存 parsed/）===
+    api_candidates: list[Path] = []
+    if pdf_attachments:
+        papers_dir = config.PAPERS_DIR
+        papers_dir.mkdir(parents=True, exist_ok=True)
+        for pdf_data in pdf_attachments:
+            pdf_key = pdf_data.get("key")
+            if not pdf_key:
+                continue
+            try:
+                filename = _safe_filename(pdf_data.get("filename") or f"{pdf_key}.pdf")
+                if not filename.lower().endswith(".pdf"):
+                    filename = f"{filename}.pdf"
+                final_path = papers_dir / f"{item_key}__{pdf_key}__{filename}"
+                if final_path.exists() and final_path.stat().st_size > 1000:
+                    logger.info(f"PDF found in Zotero API cache: {final_path}")
+                    api_candidates.append(final_path)
+                    continue
+
+                staging_dir = papers_dir / ".tmp" / f"{item_key}__{pdf_key}__{int(time.time() * 1000)}"
+                staging_dir.mkdir(parents=True, exist_ok=True)
+                try:
+                    zot.dump(pdf_key, path=str(staging_dir))
+                    candidates = [
+                        p for p in staging_dir.rglob("*.pdf")
+                        if p.is_file() and p.stat().st_size > 1000
+                    ]
+                    candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+                    if candidates:
+                        if final_path.exists():
+                            final_path.unlink()
+                        shutil.move(str(candidates[0]), str(final_path))
+                        logger.info(f"PDF downloaded from Zotero API: {final_path}")
+                        api_candidates.append(final_path)
+                finally:
+                    shutil.rmtree(staging_dir, ignore_errors=True)
+            except Exception as e:
+                logger.debug(f"API 下载失败 ({pdf_key}): {e}")
+    selected = _select_best_pdf_path(
+        api_candidates,
+        item_title,
+        item_doi,
+        require_confident=require_confident_match,
+    )
+    if selected:
+        return selected
+
+    # === 4. parsed/{key}/ 旧缓存中的 PDF（向后兼容）===
     parsed_dir = config.PARSED_DIR / item_key
+    parsed_candidates: list[Path] = []
     if parsed_dir.is_dir():
         for f in parsed_dir.glob("*.pdf"):
             if f.stat().st_size > 1000:
-                logger.info(f"PDF found in parsed cache: {f}")
-                return f
-
-    # === 3. Zotero 本地 storage ===
-    if pdf_attachments:
-        pdf_key = pdf_attachments[0]["key"]
-        local_dir = config.ZOTERO_LOCAL_STORAGE / pdf_key
-        if local_dir.is_dir():
-            for f in local_dir.iterdir():
-                if f.suffix.lower() == ".pdf":
-                    logger.info(f"PDF found in Zotero storage: {f}")
-                    return f
-
-    # === 4. Zotero API 云端下载 → 存到 data/papers/（不再存 parsed/）===
-    if pdf_attachments:
-        pdf_data = pdf_attachments[0]
-        pdf_key = pdf_data["key"]
-        papers_dir = config.PAPERS_DIR
-        papers_dir.mkdir(parents=True, exist_ok=True)
-        try:
-            filename = _safe_filename(pdf_data.get("filename") or f"{pdf_key}.pdf")
-            if not filename.lower().endswith(".pdf"):
-                filename = f"{filename}.pdf"
-            final_path = papers_dir / f"{item_key}__{pdf_key}__{filename}"
-            if final_path.exists() and final_path.stat().st_size > 1000:
-                logger.info(f"PDF found in Zotero API cache: {final_path}")
-                return final_path
-
-            staging_dir = papers_dir / ".tmp" / f"{item_key}__{pdf_key}__{int(time.time() * 1000)}"
-            staging_dir.mkdir(parents=True, exist_ok=True)
-            try:
-                zot.dump(pdf_key, path=str(staging_dir))
-                candidates = [
-                    p for p in staging_dir.rglob("*.pdf")
-                    if p.is_file() and p.stat().st_size > 1000
-                ]
-                candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-                if candidates:
-                    if final_path.exists():
-                        final_path.unlink()
-                    shutil.move(str(candidates[0]), str(final_path))
-                    logger.info(f"PDF downloaded from Zotero API: {final_path}")
-                    return final_path
-            finally:
-                shutil.rmtree(staging_dir, ignore_errors=True)
-        except Exception as e:
-            logger.debug(f"API 下载失败: {e}")
+                parsed_candidates.append(f)
+    selected = _select_best_pdf_path(
+        parsed_candidates,
+        item_title,
+        item_doi,
+        require_confident=require_confident_match,
+    )
+    if selected:
+        logger.info(f"PDF found in parsed cache: {selected}")
+        return selected
 
     logger.error(f"无法获取 PDF: {item_key}")
     return None
