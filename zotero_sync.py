@@ -16,6 +16,7 @@ import time
 import re
 from pathlib import Path
 
+import httpx
 import config
 from pyzotero import zotero
 
@@ -24,6 +25,8 @@ logger = logging.getLogger(__name__)
 # pyzotero single request limit
 _PAGE_SIZE = 100
 _PAGE_FETCH_RETRIES = 5
+_ZOTERO_FILE_TIMEOUT = httpx.Timeout(connect=15.0, read=45.0, write=15.0, pool=15.0)
+_ZOTERO_FILE_MAX_BYTES = 200 * 1024 * 1024
 
 # Non-paper types, skip
 _SKIP_TYPES = {"attachment", "note", "annotation"}
@@ -359,6 +362,47 @@ def get_item_pdf_keys(zot: zotero.Zotero | None = None, item_key: str = "") -> l
     return [data["key"] for data in _get_pdf_attachments(zot, item_key) if data.get("key")]
 
 
+def _download_attachment_file(zot: zotero.Zotero, pdf_key: str, dest: Path) -> bool:
+    """Download a Zotero attachment with bounded time and size."""
+    url = f"{zot.endpoint}/{zot.library_type}/{zot.library_id}/items/{pdf_key.upper()}/file"
+    headers = zot.default_headers()
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(dest.suffix + ".part")
+    bytes_written = 0
+    try:
+        with httpx.stream(
+            "GET",
+            url,
+            headers=headers,
+            params={"locale": zot.locale},
+            timeout=_ZOTERO_FILE_TIMEOUT,
+            follow_redirects=True,
+        ) as resp:
+            if resp.status_code != 200:
+                logger.debug("API download failed (%s): HTTP %s", pdf_key, resp.status_code)
+                return False
+            with tmp.open("wb") as f:
+                for chunk in resp.iter_bytes():
+                    if not chunk:
+                        continue
+                    bytes_written += len(chunk)
+                    if bytes_written > _ZOTERO_FILE_MAX_BYTES:
+                        logger.debug("API download failed (%s): file too large", pdf_key)
+                        return False
+                    f.write(chunk)
+        if bytes_written <= 1000:
+            logger.debug("API download failed (%s): file too small", pdf_key)
+            return False
+        tmp.replace(dest)
+        return True
+    except Exception as exc:
+        logger.debug("API download failed (%s): %s", pdf_key, type(exc).__name__)
+        return False
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
 def download_pdf(
     zot: zotero.Zotero | None = None,
     item_key: str = "",
@@ -459,7 +503,8 @@ def download_pdf(
                 staging_dir = papers_dir / ".tmp" / f"{item_key}__{pdf_key}__{int(time.time() * 1000)}"
                 staging_dir.mkdir(parents=True, exist_ok=True)
                 try:
-                    zot.dump(pdf_key, path=str(staging_dir))
+                    staging_file = staging_dir / filename
+                    _download_attachment_file(zot, pdf_key, staging_file)
                     candidates = [
                         p for p in staging_dir.rglob("*.pdf")
                         if p.is_file() and p.stat().st_size > 1000

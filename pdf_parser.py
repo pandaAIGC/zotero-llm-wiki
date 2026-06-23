@@ -12,6 +12,7 @@ Features:
 import logging
 import time
 from pathlib import Path
+from time import monotonic
 
 import httpx
 
@@ -28,15 +29,30 @@ _API_BASE = "https://mineru.net/api/v4"
 _POLL_INTERVAL_START = 2.0
 _POLL_INTERVAL_MAX = 30.0
 _DOWNLOAD_RETRIES = 3
+_DOWNLOAD_TIMEOUT = httpx.Timeout(connect=15.0, read=30.0, write=15.0, pool=15.0)
+_DOWNLOAD_MAX_SECONDS = 180.0
+_DOWNLOAD_MAX_BYTES = 500 * 1024 * 1024
 
 
 def _get_bytes_with_retries(client: httpx.Client, url: str) -> bytes:
     last_error = None
     for attempt in range(_DOWNLOAD_RETRIES):
         try:
-            resp = client.get(url)
-            resp.raise_for_status()
-            return resp.content
+            chunks: list[bytes] = []
+            bytes_read = 0
+            deadline = monotonic() + _DOWNLOAD_MAX_SECONDS
+            with client.stream("GET", url, timeout=_DOWNLOAD_TIMEOUT) as resp:
+                resp.raise_for_status()
+                for chunk in resp.iter_bytes():
+                    if not chunk:
+                        continue
+                    if monotonic() > deadline:
+                        raise TimeoutError(f"result download exceeded {_DOWNLOAD_MAX_SECONDS:.0f}s")
+                    bytes_read += len(chunk)
+                    if bytes_read > _DOWNLOAD_MAX_BYTES:
+                        raise RuntimeError(f"result download exceeded {_DOWNLOAD_MAX_BYTES} bytes")
+                    chunks.append(chunk)
+            return b"".join(chunks)
         except Exception as exc:
             last_error = exc
             if attempt < _DOWNLOAD_RETRIES - 1:
