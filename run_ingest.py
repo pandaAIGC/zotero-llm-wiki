@@ -876,6 +876,7 @@ def run(
 
     parse_failures = _load_parse_failures()
     parse_failures_skipped = 0
+    no_pdf_skipped = 0
 
     # -- Phase 1: Download PDF + Check cache --
     print("=" * 60)
@@ -920,6 +921,7 @@ def run(
             logger.error(f"  [{i}/{len(items)}] {key}: PDF lookup crashed: {e} - SKIP", exc_info=True)
             pdf_path = None
         if pdf_path is None:
+            no_pdf_skipped += 1
             logger.warning(f"  [{i}/{len(items)}] {key}: no PDF - SKIP")
             continue
 
@@ -1035,6 +1037,8 @@ def run(
 
     print(f"\n  缓存命中: {len(cached)} 篇")
     print(f"  需要解析: {len(need_parse)} 篇")
+    if no_pdf_skipped:
+        print(f"  无 PDF 跳过: {no_pdf_skipped} 篇")
     if parse_failures_skipped:
         print(f"  解析失败历史跳过: {parse_failures_skipped} 篇")
     if suspect_pdf_duplicate_keys:
@@ -1186,6 +1190,7 @@ def run(
         "parsed": len(parsed),
         "parse_failed_empty": len(parse_failed_empty),
         "parse_failed_empty_keys": sorted(parse_failed_empty),
+        "no_pdf_skipped": no_pdf_skipped,
         "parse_failures_skipped": parse_failures_skipped,
         "parse_failure_max_attempts": config.PARSE_FAILURE_MAX_ATTEMPTS,
         "success": 0,
@@ -1204,6 +1209,7 @@ def run(
         "suspect_pdf_duplicates": len(suspect_pdf_duplicate_keys),
         "exact_pdf_duplicate_skipped": exact_pdf_duplicate_skipped,
     }
+    stats["no_actionable"] = not all_papers and not need_parse and not stats["api_limited"]
 
     embedded_papers = 0
     for i, (key, (item, markdown_text)) in enumerate(all_papers.items(), 1):
@@ -1258,7 +1264,9 @@ def run(
     print(f"  解析模式:    {stats['parse_mode']}")
     print(f"  解析成功:    {stats['parsed']} 篇")
     print(f"  解析空结果:  {stats['parse_failed_empty']} 篇")
+    print(f"  无 PDF 跳过: {stats['no_pdf_skipped']} 篇")
     print(f"  解析失败跳过: {stats['parse_failures_skipped']} 篇")
+    print(f"  无可入库新增: {'是' if stats['no_actionable'] else '否'}")
     print(f"  入库成功:   {stats['success']} 篇")
     print(f"  跳过:       {stats['skipped']} 篇")
     print(f"  失败:       {stats['failed']} 篇")

@@ -281,14 +281,30 @@ def _decide_status(
     chunks = int(stats.get("chunks") or 0)
     failed = int(stats.get("failed") or 0)
     stats_parse_failed_empty = int(stats.get("parse_failed_empty") or 0)
+    stats_no_pdf_skipped = int(stats.get("no_pdf_skipped") or 0)
     stats_parse_failures_skipped = int(stats.get("parse_failures_skipped") or 0)
     stats_suspect_pdf_duplicates = int(stats.get("suspect_pdf_duplicates") or 0)
+    no_actionable = bool(stats.get("no_actionable"))
+    if not no_actionable:
+        no_actionable = (
+            success == 0
+            and chunks == 0
+            and failed == 0
+            and not stats.get("api_limited")
+            and chroma_total > 0
+            and parsed_count > 0
+            and (
+                stats_no_pdf_skipped > 0
+                or stats_parse_failures_skipped > 0
+                or stats_suspect_pdf_duplicates > 0
+            )
+        )
     log_parse_failed_empty = sorted(set(log.get("parse_failed_empty") or []))
     log_no_chunks = sorted(set(log.get("no_chunks") or []))
 
-    if success <= 0:
+    if success <= 0 and not no_actionable:
         reasons.append("last ingest success count is zero")
-    if chunks <= 0:
+    if chunks <= 0 and not no_actionable:
         reasons.append("last ingest chunk count is zero")
     if chroma_total <= 0:
         reasons.append("ChromaDB has zero chunks")
@@ -298,6 +314,8 @@ def _decide_status(
         reasons.append(f"last ingest failed count is {failed}")
     if stats_parse_failed_empty > 0:
         reasons.append(f"last ingest MinerU failed/empty count is {stats_parse_failed_empty}")
+    if no_actionable and stats_no_pdf_skipped > 0:
+        reasons.append(f"last ingest had no actionable new PDFs ({stats_no_pdf_skipped} no-PDF skips)")
     if stats_parse_failures_skipped > 0:
         reasons.append(f"last ingest skipped {stats_parse_failures_skipped} previous parse failure(s)")
     if stats_suspect_pdf_duplicates > 0:
@@ -320,6 +338,7 @@ def _decide_status(
     warning_prefixes = (
         "last ingest success count is zero",
         "last ingest chunk count is zero",
+        "last ingest had no actionable new PDFs ",
         "parsed cache has ",
         "last ingest MinerU failed/empty count is ",
         "last ingest skipped ",
