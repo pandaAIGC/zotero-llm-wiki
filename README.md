@@ -254,6 +254,18 @@ lint 会检查：
 
 报告写入 `wiki/lint/`，并向 `wiki/log.md` 追加体检记录。
 
+### 步骤 8：诊断重复 parsed 缓存
+
+如果入库审计提示 `parsed cache has duplicate markdown hash group(s)`，可以生成一份带 Zotero 元数据的中文分级报告：
+
+```bash
+.venv\Scripts\python.exe scripts/zotero_parsed_duplicate_report.py ^
+  --output-dir <YOUR_OBSIDIAN_WIKI_DIR> ^
+  --zotero-sqlite <YOUR_ZOTERO_SQLITE>
+```
+
+报告会写入 `audits/parsed-duplicate-report-*.md/json/csv`，按 DOI、题名、parsed 头部匹配度分为“可能重复”“需要核对 Zotero key”“可疑错配”等类别。这个脚本只读 Zotero SQLite、审计 JSON 和 `parsed/`，不会删除缓存，也不会修改 Zotero。
+
 ## API Key 申请指南
 
 | API | 用途 | 申请地址 | 费用 |
@@ -303,7 +315,8 @@ zotero-llm-wiki/
 │   ├── zotero_obsidian_wiki.py       # Zotero LLM Wiki → Obsidian LLM Wiki
 │   ├── zotero_obsidian_wiki_lint.py  # Wiki 健康检查
 │   ├── zotero_obsidian_review.py     # 每日复盘笔记
-│   └── zotero_ingest_audit.py        # 入库审计报告
+│   ├── zotero_ingest_audit.py        # 入库审计报告
+│   └── zotero_parsed_duplicate_report.py # parsed 重复缓存诊断
 ├── templates/
 │   └── wiki/AGENTS.md     # LLM Wiki 维护规则模板
 │
