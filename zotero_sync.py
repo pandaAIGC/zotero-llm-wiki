@@ -341,6 +341,8 @@ def list_items(
             "year": year,
             "doi": data.get("DOI", ""),
             "item_type": data["itemType"],
+            "date_added": data.get("dateAdded", ""),
+            "date_modified": data.get("dateModified", ""),
             "journal": data.get("publicationTitle", ""),
             "journal_abbreviation": data.get("journalAbbreviation", ""),
             "issn": data.get("ISSN", ""),

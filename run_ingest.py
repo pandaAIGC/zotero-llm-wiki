@@ -23,6 +23,7 @@ import json
 import re
 import time
 import hashlib
+from datetime import datetime, timezone
 from pathlib import Path
 
 # Ensure UTF-8 output
@@ -59,6 +60,71 @@ MINERU_NO_PROGRESS_TIMEOUT = 900
 
 _DEFAULT_JCR_FILE_ENV = os.environ.get("ZOTERO_JCR_FILE", "")
 DEFAULT_JCR_FILE = Path(_DEFAULT_JCR_FILE_ENV) if _DEFAULT_JCR_FILE_ENV else None
+DAILY_STATE_FILE = config.DATA_DIR / "daily_incremental_state.json"
+
+
+def _parse_zotero_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    text = value.strip()
+    if text.endswith("Z"):
+        text = text[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _iso_utc(dt: datetime) -> str:
+    return dt.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _daily_since_baseline() -> datetime:
+    if DAILY_STATE_FILE.exists():
+        try:
+            state = json.loads(DAILY_STATE_FILE.read_text(encoding="utf-8"))
+            dt = _parse_zotero_datetime(str(state.get("last_run_started_at") or ""))
+            if dt:
+                return dt
+        except Exception as exc:
+            logger.warning("Could not read daily incremental state %s: %s", DAILY_STATE_FILE, exc)
+
+    stats_path = config.DATA_DIR / "last_ingest_stats.json"
+    if stats_path.exists():
+        return datetime.fromtimestamp(stats_path.stat().st_mtime, tz=timezone.utc)
+    return datetime.now(timezone.utc)
+
+
+def _save_daily_state(run_started_at: datetime, stats: dict) -> None:
+    DAILY_STATE_FILE.write_text(
+        json.dumps(
+            {
+                "last_run_started_at": _iso_utc(run_started_at),
+                "last_stats": {
+                    "total": stats.get("total"),
+                    "success": stats.get("success"),
+                    "chunks": stats.get("chunks"),
+                    "api_limited": stats.get("api_limited"),
+                    "no_actionable": stats.get("no_actionable"),
+                },
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _save_stats(stats: dict, parse_failures: dict | None = None) -> Path:
+    stats_path = config.DATA_DIR / "last_ingest_stats.json"
+    if parse_failures is not None:
+        _save_parse_failures(parse_failures)
+    with open(stats_path, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+    return stats_path
 
 
 def _is_api_limit_error(exc: BaseException) -> bool:
@@ -786,8 +852,10 @@ def run(
     max_embed_chunks: int = 0,
     item_keys: set[str] | None = None,
     local_parse_only: bool = False,
+    daily_new_only: bool = False,
 ):
     """运行完整入库管线"""
+    run_started_at = datetime.now(timezone.utc)
     print("=" * 60)
     print("  Zotero LLM Wiki - 批量入库管线")
     print("=" * 60)
@@ -798,6 +866,8 @@ def run(
     print(f"  MinerU batch:    {mineru_batch_size}")
     if item_keys:
         print(f"  Item keys:       {', '.join(sorted(item_keys))}")
+    if daily_new_only:
+        print("  Daily mode:      only Zotero items added after previous daily run")
     if local_parse_only:
         print("  Parse mode:      local PDF text only (MinerU disabled)")
     if max_parse_papers > 0:
@@ -817,6 +887,16 @@ def run(
     else:
         items = zotero_sync.list_items(zot, check_pdf=False)
     print(f"  Zotero 论文总数: {len(items)}")
+
+    daily_since = None
+    if daily_new_only and not item_keys:
+        daily_since = _daily_since_baseline()
+        before = len(items)
+        items = [
+            item for item in items
+            if (dt := _parse_zotero_datetime(item.get("date_added"))) is not None and dt > daily_since
+        ]
+        print(f"  每日新增过滤: {before} -> {len(items)} 篇 (dateAdded > {_iso_utc(daily_since)})")
 
     if collection_filter:
         items = [
@@ -857,6 +937,41 @@ def run(
 
     if not items:
         print("\n  没有需要处理的论文")
+        if daily_new_only and not dry_run:
+            stats = {
+                "total": 0,
+                "daily_new_only": True,
+                "daily_since": _iso_utc(daily_since or run_started_at),
+                "high_impact_only": high_impact_only,
+                "min_impact_factor": min_impact_factor if high_impact_only else None,
+                "require_q1": require_q1 if high_impact_only else None,
+                "cached": 0,
+                "parsed": 0,
+                "parse_failed_empty": 0,
+                "parse_failed_empty_keys": [],
+                "no_pdf_skipped": 0,
+                "parse_failures_skipped": 0,
+                "parse_failure_max_attempts": config.PARSE_FAILURE_MAX_ATTEMPTS,
+                "success": 0,
+                "skipped": 0,
+                "failed": 0,
+                "chunks": 0,
+                "api_limited": False,
+                "parse_mode": "local" if local_parse_only else "mineru",
+                "embed_provider": config.EMBED_PROVIDER,
+                "embed_model": config.EMBED_MODEL,
+                "parse_budget_stopped": False,
+                "max_parse_papers": max_parse_papers or None,
+                "embed_budget_stopped": False,
+                "max_embed_papers": max_embed_papers or None,
+                "max_embed_chunks": max_embed_chunks or None,
+                "suspect_pdf_duplicates": 0,
+                "exact_pdf_duplicate_skipped": 0,
+                "no_actionable": True,
+            }
+            stats_path = _save_stats(stats)
+            _save_daily_state(run_started_at, stats)
+            print(f"\nStats saved: {stats_path}")
         return
 
     if dry_run:
@@ -1183,6 +1298,8 @@ def run(
 
     stats = {
         "total": len(items),
+        "daily_new_only": daily_new_only,
+        "daily_since": _iso_utc(daily_since) if daily_since else None,
         "high_impact_only": high_impact_only,
         "min_impact_factor": min_impact_factor if high_impact_only else None,
         "require_q1": require_q1 if high_impact_only else None,
@@ -1285,10 +1402,9 @@ def run(
         print(f"  (error: {e})")
 
     # Save statistics
-    stats_path = config.DATA_DIR / "last_ingest_stats.json"
-    _save_parse_failures(parse_failures)
-    with open(stats_path, "w", encoding="utf-8") as f:
-        json.dump(stats, f, ensure_ascii=False, indent=2)
+    stats_path = _save_stats(stats, parse_failures)
+    if daily_new_only and not stats["api_limited"]:
+        _save_daily_state(run_started_at, stats)
     print(f"\nStats saved: {stats_path}")
 
 
@@ -1312,6 +1428,7 @@ if __name__ == "__main__":
     parser.add_argument("--max-embed-chunks", type=int, default=0, help="stop Phase 3 before exceeding this many chunk writes (0=unlimited)")
     parser.add_argument("--item-key", action="append", default=[], help="process only this Zotero item key; repeatable")
     parser.add_argument("--local-parse-only", action="store_true", help="use local PDF text extraction for parsing and do not call MinerU")
+    parser.add_argument("--daily-new-only", action="store_true", help="process only Zotero items added after the previous daily run state")
     args = parser.parse_args()
 
     run(
@@ -1331,4 +1448,5 @@ if __name__ == "__main__":
         max_embed_chunks=args.max_embed_chunks,
         item_keys=set(args.item_key) if args.item_key else None,
         local_parse_only=args.local_parse_only,
+        daily_new_only=args.daily_new_only,
     )

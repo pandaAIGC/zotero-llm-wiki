@@ -176,6 +176,14 @@ CORE_API_KEY=你的CORE API密钥
 .venv\Scripts\python.exe run_ingest.py --incremental --max-embed-chunks 2000
 ```
 
+日常自动任务建议使用“只看上次每日任务后新增条目”的模式，避免每天重复扫描无 PDF、历史解析失败或已标记的可疑重复条目：
+
+```bash
+.venv\Scripts\python.exe run_ingest.py --incremental --daily-new-only --batch-size 1
+```
+
+该模式会维护 `data/daily_incremental_state.json`，按 Zotero 的 `dateAdded` 过滤新增文献；普通 `--incremental` 仍可用于人工全库补齐和残余修复。
+
 如果使用本地 Ollama embedding，建议先建一个独立索引，不覆盖现有智谱索引：
 
 ```bash
