@@ -76,7 +76,7 @@ def _parsed_keys() -> set[str]:
 def _parsed_duplicate_hashes() -> list[dict[str, Any]]:
     if not config.PARSED_DIR.exists():
         return []
-    groups: dict[str, list[dict[str, Any]]] = {}
+    by_size: dict[int, list[tuple[str, Path]]] = {}
     for parsed_dir in config.PARSED_DIR.iterdir():
         if not parsed_dir.is_dir():
             continue
@@ -84,22 +84,33 @@ def _parsed_duplicate_hashes() -> list[dict[str, Any]]:
         if not md_files:
             continue
         md_path = md_files[0]
-        h = hashlib.sha256()
-        with md_path.open("rb") as f:
-            for chunk in iter(lambda: f.read(1024 * 1024), b""):
-                h.update(chunk)
-        digest = h.hexdigest()
-        head = ""
         try:
-            head = " ".join(md_path.read_text(encoding="utf-8", errors="replace").splitlines()[:5])[:240]
-        except Exception:
+            size = md_path.stat().st_size
+        except OSError:
+            continue
+        by_size.setdefault(size, []).append((parsed_dir.name, md_path))
+
+    groups: dict[str, list[dict[str, Any]]] = {}
+    for same_size_files in by_size.values():
+        if len(same_size_files) < 2:
+            continue
+        for key, md_path in same_size_files:
+            h = hashlib.sha256()
+            with md_path.open("rb") as f:
+                for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                    h.update(chunk)
+            digest = h.hexdigest()
             head = ""
-        groups.setdefault(digest, []).append({
-            "key": parsed_dir.name,
-            "path": str(md_path),
-            "size": md_path.stat().st_size,
-            "head": head,
-        })
+            try:
+                head = " ".join(md_path.read_text(encoding="utf-8", errors="replace").splitlines()[:5])[:240]
+            except Exception:
+                head = ""
+            groups.setdefault(digest, []).append({
+                "key": key,
+                "path": str(md_path),
+                "size": md_path.stat().st_size,
+                "head": head,
+            })
     duplicates = [
         {"hash": digest, "count": len(items), "items": items}
         for digest, items in groups.items()
